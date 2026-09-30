@@ -42,18 +42,19 @@
   box-sizing: border-box;
 }
 
-/* The black body is the page frame; on wide screens it becomes the side gutters. */
 body {
   margin: 0;
-  padding: var(--frame);
-  background: var(--frame-ink);
+  padding: var(--space-xxl) var(--space-lg);
+  background: var(--canvas);
   color: var(--ink);
   font: 14px/1.4 var(--font-body);
 }
 
+/* The page frame: a black border around the centred page, white outside it. */
 .page {
   max-width: 1120px;
   margin: 0 auto;
+  border: var(--frame) solid var(--frame-ink);
   background: var(--canvas);
 }
 
@@ -357,6 +358,10 @@ th button[data-dir="desc"]::after {
     --frame: 4px;
   }
 
+  body {
+    padding: var(--space-md) var(--space-sm);
+  }
+
   .intro {
     grid-template-columns: 1fr;
     gap: var(--space-lg);
@@ -372,6 +377,11 @@ th button[data-dir="desc"]::after {
 @media (max-width: 480px) {
   :root {
     --frame: 2px;
+  }
+
+  /* Phones: the frame runs to the screen edge to keep room for the table. */
+  body {
+    padding: 0;
   }
 
   h1 {
