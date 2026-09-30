@@ -211,7 +211,7 @@ async function init() {
     els.status.textContent =
       `Every morning around 11:00 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against five rules. " +
-      `${countFormat.format(passing)} pass all five and are listed below.`;
+      `${countFormat.format(passing)} pass all five and are listed above.`;
   } catch (error) {
     els.sticker.textContent = "No data";
     els.status.textContent = `Could not load fund data: ${error.message}`;

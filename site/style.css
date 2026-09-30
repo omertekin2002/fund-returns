@@ -126,13 +126,13 @@ h1 {
   white-space: nowrap;
 }
 
-/* ─── Intro: red panel rail + criteria ─── */
+/* ─── About (below the table): red panel rail + criteria ─── */
 
-.intro {
+.about {
   display: grid;
   grid-template-columns: minmax(0, 28fr) minmax(0, 72fr);
   gap: var(--space-xxl);
-  padding: var(--space-xxl) var(--space-lg) 0;
+  padding: var(--space-section) var(--space-lg) 0;
 }
 
 .cta-block {
@@ -150,6 +150,7 @@ h1 {
 .eyebrow {
   margin: 0 0 var(--space-lg);
   padding: var(--space-xxl) var(--space-lg);
+  border: var(--hairline);
   color: var(--ink);
   font: 900 36px/1 var(--font-display);
   text-transform: uppercase;
@@ -211,7 +212,7 @@ h1 {
 /* ─── Fund table ─── */
 
 .funds {
-  padding: var(--space-section) var(--space-lg) 0;
+  padding: var(--space-xxl) var(--space-lg) 0;
 }
 
 .controls {
@@ -362,7 +363,7 @@ th button[data-dir="desc"]::after {
     padding: var(--space-md) var(--space-sm);
   }
 
-  .intro {
+  .about {
     grid-template-columns: 1fr;
     gap: var(--space-lg);
   }
