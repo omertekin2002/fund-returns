@@ -3,28 +3,43 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
   <title>TEFAS Fund Screener</title>
   <meta name="description" content="TEFAS securities investment funds filtered by 1M, 3M, 6M and 1Y return criteria, updated daily.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="page-header">
-    <h1>TEFAS Fund Screener</h1>
-    <p class="subtitle">
-      Securities investment funds (Menkul Kıymet Yatırım Fonları) traded on TEFAS,
-      filtered by return. Data refreshes every day around 11:00 Istanbul time.
-    </p>
-    <p id="status" class="status">Loading fund data…</p>
-  </header>
+  <div class="page">
+    <header class="top-banner">
+      <div class="banner-text">
+        <h1>TEFAS Fund Screener</h1>
+        <p class="tagline">Fund returns. Filtered. Every morning.</p>
+      </div>
+      <div class="banner-side">
+        <span id="pass-sticker" class="sticker">Loading…</span>
+        <span id="updated" class="callout"></span>
+      </div>
+    </header>
 
-  <main>
-    <section class="criteria" aria-labelledby="criteria-title">
-      <h2 id="criteria-title">Criteria</h2>
-      <p class="hint">A fund is shown only if it breaks none of these rules. Missing 3M, 6M, 1Y, 3Y and 5Y returns are allowed.</p>
-      <ol id="rules" class="rules"></ol>
-    </section>
+    <div class="intro">
+      <aside class="rail">
+        <div class="cta-block">
+          <p id="status">Loading fund data…</p>
+        </div>
+        <p class="rail-note">
+          Securities investment funds (Menkul Kıymet Yatırım Fonları) traded on TEFAS.
+          Returns are cumulative percentages for each period. Fund codes link to the fund's TEFAS page.
+        </p>
+      </aside>
 
-    <section class="results" aria-label="Funds">
+      <section class="criteria" aria-labelledby="criteria-title">
+        <h2 id="criteria-title" class="eyebrow eyebrow-olive">The Criteria</h2>
+        <ol id="rules" class="ribbon-list"></ol>
+      </section>
+    </div>
+
+    <section class="funds" aria-labelledby="funds-title">
+      <h2 id="funds-title" class="eyebrow eyebrow-salmon">The Funds</h2>
       <div class="controls">
         <div class="view-toggle" role="group" aria-label="Which funds to show">
           <button type="button" data-view="passing" aria-pressed="true">Passing <span data-count="passing"></span></button>
@@ -42,12 +57,14 @@
       </div>
       <p id="empty" class="empty" hidden>No funds match.</p>
     </section>
-  </main>
 
-  <footer class="page-footer">
-    Source: <a href="https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT" rel="noopener">TEFAS Fon Getirileri</a>.
-    Returns are cumulative percentages for each period. This page is not investment advice.
-  </footer>
+    <footer class="footer-band">
+      <p>
+        Source: <a href="https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT" rel="noopener">TEFAS Fon Getirileri</a>.
+        Data is refreshed every day around 11:00 Istanbul time. This page is not investment advice.
+      </p>
+    </footer>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

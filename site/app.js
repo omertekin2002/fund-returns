@@ -24,6 +24,8 @@ const state = {
 
 const els = {
   status: document.getElementById("status"),
+  sticker: document.getElementById("pass-sticker"),
+  updated: document.getElementById("updated"),
   rules: document.getElementById("rules"),
   headerRow: document.getElementById("header-row"),
   body: document.querySelector("#funds tbody"),
@@ -32,6 +34,7 @@ const els = {
   viewButtons: document.querySelectorAll("[data-view]"),
 };
 
+const countFormat = new Intl.NumberFormat("en-US");
 const numberFormat = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -63,13 +66,18 @@ function renderRules() {
     if (fund.reason) counts[fund.reason.rule] = (counts[fund.reason.rule] ?? 0) + 1;
   }
   els.rules.replaceChildren(
-    ...RULES.map((rule) => {
+    ...RULES.map((rule, index) => {
       const li = document.createElement("li");
-      li.textContent = rule.text;
-      const count = document.createElement("span");
-      count.className = "rule-count";
-      count.textContent = `${counts[rule.id] ?? 0} excluded`;
-      li.append(" ", count);
+      li.className = "ribbon";
+      const title = document.createElement("div");
+      title.className = "ribbon-title";
+      title.textContent = `Rule ${index + 1} · ${rule.title}`;
+      const body = document.createElement("div");
+      body.className = `ribbon-body rule-${rule.id}`;
+      const count = document.createElement("strong");
+      count.textContent = `${countFormat.format(counts[rule.id] ?? 0)} funds out.`;
+      body.append(`${rule.text} `, count);
+      li.append(title, body);
       return li;
     }),
   );
@@ -126,7 +134,6 @@ function renderBody() {
   const columns = visibleColumns();
   const rows = selectedFunds().map((fund) => {
     const tr = document.createElement("tr");
-    if (fund.reason) tr.className = "is-excluded";
     for (const col of columns) {
       const td = document.createElement("td");
       td.className = `col-${col.type} col-${col.key}`;
@@ -140,9 +147,10 @@ function renderBody() {
         td.append(link);
       } else if (col.type === "return") {
         td.textContent = formatReturn(value);
-        if (value > 0) td.classList.add("pos");
-        else if (value < 0) td.classList.add("neg");
-        else if (value === null || value === undefined) td.classList.add("missing");
+      } else if (col.key === "reason" && fund.reason) {
+        // Tinted with the colour of the rule's card above the table.
+        td.classList.add(`rule-${fund.reason.rule}`);
+        td.textContent = value;
       } else {
         td.textContent = value ?? "—";
       }
@@ -158,7 +166,7 @@ function renderCounts() {
   const passing = state.funds.filter((f) => !f.reason).length;
   const counts = { passing, excluded: state.funds.length - passing, all: state.funds.length };
   for (const el of document.querySelectorAll("[data-count]")) {
-    el.textContent = counts[el.dataset.count];
+    el.textContent = countFormat.format(counts[el.dataset.count]);
   }
   for (const button of els.viewButtons) {
     button.setAttribute("aria-pressed", String(button.dataset.view === state.view));
@@ -197,12 +205,16 @@ async function init() {
       searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
     }));
     const passing = state.funds.filter((f) => !f.reason).length;
+    els.sticker.textContent = `${countFormat.format(passing)} funds pass`;
+    els.updated.textContent = `Updated ${formatFetchedAt(data.fetchedAt)}`;
+    els.updated.title = "Istanbul time";
     els.status.textContent =
-      `Updated ${formatFetchedAt(data.fetchedAt)} (Istanbul time) · ` +
-      `${passing} of ${state.funds.length} funds pass the criteria`;
+      `Every morning around 11:00 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
+      "funds traded on TEFAS are checked against five rules. " +
+      `${countFormat.format(passing)} pass all five and are listed below.`;
   } catch (error) {
+    els.sticker.textContent = "No data";
     els.status.textContent = `Could not load fund data: ${error.message}`;
-    els.status.classList.add("error");
     return;
   }
 

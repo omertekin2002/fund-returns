@@ -26,11 +26,15 @@ export const MINIMUM_RETURNS = [
 export const ORDERED_HORIZONS = ["1m", "3m", "6m", "1y", "3y", "5y"];
 
 export const RULES = [
-  { id: "min-1m", text: "1-month return is missing or below 3%" },
-  { id: "min-3m", text: "3-month return is below 9%" },
-  { id: "min-6m", text: "6-month return is below 19%" },
-  { id: "min-1y", text: "1-year return is below 42.5%" },
-  { id: "order", text: "A longer horizon has a lower return than a shorter one" },
+  { id: "min-1m", title: "1-month return", text: "Out if it is missing or below 3%." },
+  { id: "min-3m", title: "3-month return", text: "Out if it is below 9%. A missing value is allowed." },
+  { id: "min-6m", title: "6-month return", text: "Out if it is below 19%. A missing value is allowed." },
+  { id: "min-1y", title: "1-year return", text: "Out if it is below 42.5%. A missing value is allowed." },
+  {
+    id: "order",
+    title: "Longer beats shorter",
+    text: "Out if any longer period (1M, 3M, 6M, 1Y, 3Y, 5Y) returned less than a shorter one. YTD is not compared.",
+  },
 ];
 
 const label = (key) => HORIZONS.find((h) => h.key === key).label;

@@ -35,13 +35,15 @@ the page can also list excluded funds with the rule each one broke.
   fetching. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
 
+The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
+black page frame, flat colour blocks, Arial Black headings over Times body).
+
 ## Setup
 
-1. Merge this into `main`.
-2. In **Settings › Pages**, set **Source** to **GitHub Actions**.
+1. In **Settings › Pages**, set **Source** to **GitHub Actions**.
    GitHub Pages on a private repository needs a paid plan (GitHub Pro or
    higher); on the free plan, make the repository public.
-3. Run the workflow once from the Actions tab. The site URL appears on the
+2. Run the workflow once from the Actions tab. The site URL appears on the
    deploy job.
 
 The workflow commits the data file to `main` itself; if you add branch
