@@ -11,12 +11,12 @@ Uses only the Python standard library so the workflow needs no install step.
 The output file is only replaced after the response passes validation.
 """
 
+import http.client
 import json
 import os
 import sys
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -87,7 +87,9 @@ def fetch_raw():
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
                 return json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        # OSError covers URLError/HTTPError, timeouts and dropped connections;
+        # ValueError covers a non-JSON body such as a bot-protection page.
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             last_error = exc
             print(f"Attempt {attempt}/{ATTEMPTS} failed: {exc}", file=sys.stderr)
             if attempt < ATTEMPTS:
