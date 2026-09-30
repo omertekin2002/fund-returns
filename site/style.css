@@ -1,0 +1,300 @@
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #1c2129;
+  --muted: #5f6b7a;
+  --border: #dde2e8;
+  --accent: #1f5fbf;
+  --accent-soft: #e6eefb;
+  --pos: #0f7a3d;
+  --neg: #b42318;
+  --row-hover: #f1f4f8;
+  --excluded: #8a94a3;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --surface: #181c22;
+    --text: #e6e9ee;
+    --muted: #98a2b0;
+    --border: #2b323c;
+    --accent: #7aa7f0;
+    --accent-soft: #1e2a3d;
+    --pos: #4cc17f;
+    --neg: #f07b70;
+    --row-hover: #1f252d;
+    --excluded: #6f7886;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.page-header,
+main,
+.page-footer {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.page-header {
+  padding-top: 32px;
+}
+
+h1 {
+  margin: 0 0 4px;
+  font-size: 1.75rem;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  max-width: 70ch;
+}
+
+.status {
+  margin: 12px 0 0;
+  font-weight: 600;
+}
+
+.status.error {
+  color: var(--neg);
+}
+
+.criteria {
+  margin: 24px 0;
+  padding: 16px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.rules {
+  margin: 0;
+  padding-left: 1.4em;
+}
+
+.rules li {
+  margin: 2px 0;
+}
+
+.rule-count {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.rule-count::before {
+  content: "· ";
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.view-toggle button {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 7px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.view-toggle button:last-child {
+  border-right: 0;
+}
+
+.view-toggle button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.view-toggle span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: 2px;
+}
+
+#search {
+  flex: 1 1 240px;
+  max-width: 360px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+tbody tr:hover {
+  background: var(--row-hover);
+}
+
+thead th {
+  background: var(--surface);
+  white-space: nowrap;
+  padding: 0;
+}
+
+th button {
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+th button:hover {
+  color: var(--text);
+}
+
+th button[data-dir] {
+  color: var(--accent);
+}
+
+th button[data-dir="asc"]::after {
+  content: " ▲";
+  font-size: 0.7em;
+}
+
+th button[data-dir="desc"]::after {
+  content: " ▼";
+  font-size: 0.7em;
+}
+
+.col-return,
+.col-number {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-code {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.col-name {
+  min-width: 260px;
+}
+
+.col-umbrella {
+  min-width: 150px;
+  color: var(--muted);
+}
+
+.col-reason {
+  min-width: 180px;
+  white-space: nowrap;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.pos {
+  color: var(--pos);
+}
+
+.neg {
+  color: var(--neg);
+}
+
+.missing {
+  color: var(--muted);
+}
+
+tr.is-excluded td {
+  color: var(--excluded);
+}
+
+tr.is-excluded .col-reason {
+  color: var(--neg);
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.page-footer {
+  margin-top: 24px;
+  padding-bottom: 32px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}

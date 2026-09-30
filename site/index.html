@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TEFAS Fund Screener</title>
+  <meta name="description" content="TEFAS securities investment funds filtered by 1M, 3M, 6M and 1Y return criteria, updated daily.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="page-header">
+    <h1>TEFAS Fund Screener</h1>
+    <p class="subtitle">
+      Securities investment funds (Menkul Kıymet Yatırım Fonları) traded on TEFAS,
+      filtered by return. Data refreshes every day around 11:00 Istanbul time.
+    </p>
+    <p id="status" class="status">Loading fund data…</p>
+  </header>
+
+  <main>
+    <section class="criteria" aria-labelledby="criteria-title">
+      <h2 id="criteria-title">Criteria</h2>
+      <p class="hint">A fund is shown only if it breaks none of these rules. Missing 3M, 6M, 1Y, 3Y and 5Y returns are allowed.</p>
+      <ol id="rules" class="rules"></ol>
+    </section>
+
+    <section class="results" aria-label="Funds">
+      <div class="controls">
+        <div class="view-toggle" role="group" aria-label="Which funds to show">
+          <button type="button" data-view="passing" aria-pressed="true">Passing <span data-count="passing"></span></button>
+          <button type="button" data-view="excluded" aria-pressed="false">Excluded <span data-count="excluded"></span></button>
+          <button type="button" data-view="all" aria-pressed="false">All <span data-count="all"></span></button>
+        </div>
+        <input id="search" type="search" placeholder="Search code, name or type" aria-label="Search funds" autocomplete="off">
+      </div>
+
+      <div class="table-wrap">
+        <table id="funds">
+          <thead><tr id="header-row"></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p id="empty" class="empty" hidden>No funds match.</p>
+    </section>
+  </main>
+
+  <footer class="page-footer">
+    Source: <a href="https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT" rel="noopener">TEFAS Fon Getirileri</a>.
+    Returns are cumulative percentages for each period. This page is not investment advice.
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
