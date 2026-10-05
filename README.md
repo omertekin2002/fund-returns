@@ -2,9 +2,10 @@
 
 A static site on GitHub Pages that lists TEFAS securities investment funds
 (Menkul Kıymet Yatırım Fonları, `fundType=YAT`) that pass a set of return
-criteria. A GitHub Actions workflow refreshes the data every day at about
-11:07 Istanbul time (08:07 UTC). GitHub can start scheduled runs late when
-Actions is busy, so the page shows the time the data was actually fetched.
+criteria. A GitHub Actions workflow refreshes the data every weekday
+(Monday to Friday) at about 11:07 Istanbul time (08:07 UTC). GitHub can
+start scheduled runs late when Actions is busy, so the page shows the time
+the data was actually fetched.
 
 ## Criteria
 
@@ -31,8 +32,8 @@ the page can also list excluded funds with the rule each one broke.
   standard library and refuses to overwrite the file if the response looks
   wrong.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
-  script on schedule, commits the new data file (giving a daily history), and
-  deploys `site/` to GitHub Pages. Pushes to `main` redeploy the site without
+  script on schedule, commits the new data file (giving a history of every
+  update), and deploys `site/` to GitHub Pages. Pushes to `main` redeploy the site without
   fetching. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
 
