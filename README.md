@@ -3,7 +3,8 @@
 A static site on GitHub Pages that lists TEFAS securities investment funds
 (Menkul Kıymet Yatırım Fonları, `fundType=YAT`) that pass a set of return
 criteria. A GitHub Actions workflow refreshes the data every day at about
-11:00 Istanbul time (08:00 UTC).
+11:07 Istanbul time (08:07 UTC). GitHub can start scheduled runs late when
+Actions is busy, so the page shows the time the data was actually fetched.
 
 ## Criteria
 

@@ -2,9 +2,10 @@ name: Update fund data and deploy site
 
 on:
   schedule:
-    # 08:00 UTC = 11:00 in Türkiye (UTC+3). GitHub may start scheduled runs
-    # a few minutes late.
-    - cron: "0 8 * * *"
+    # 08:07 UTC = 11:07 in Türkiye (UTC+3). Kept off minute 0: GitHub delays
+    # scheduled runs at the start of the hour the most (runs set for 08:00
+    # started 5-7 hours late).
+    - cron: "7 8 * * *"
   workflow_dispatch:
   # Pushes to main redeploy the site with the data already in the repo.
   push:
