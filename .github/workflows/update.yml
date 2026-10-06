@@ -1,7 +1,7 @@
 name: Update fund data and deploy site
 
 on:
-  # A cron-job.org job starts this workflow through the API at 11:00
+  # A cron-job.org job starts this workflow through the API at 10:15
   # Istanbul time on weekdays (see README), because GitHub starts scheduled
   # runs hours late. This schedule (12:37 Istanbul, Mon-Fri) is only a
   # fallback in case that call fails: it skips itself once today's data is in.
@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # Read the data file from the tip of the branch, not the checkout: this
-      # run may have been queued before the 11:00 run committed.
+      # run may have been queued before the 10:15 run committed.
       - name: Check whether today's data is already in
         id: today
         if: github.event_name == 'schedule'

@@ -209,7 +209,7 @@ async function init() {
     els.updated.textContent = `Updated ${formatFetchedAt(data.fetchedAt)}`;
     els.updated.title = "Istanbul time";
     els.status.textContent =
-      `Every weekday morning around 11:00 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
+      `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against five rules. " +
       `${countFormat.format(passing)} pass all five and are listed above.`;
   } catch (error) {

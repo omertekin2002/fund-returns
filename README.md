@@ -3,7 +3,7 @@
 A static site on GitHub Pages that lists TEFAS securities investment funds
 (Menkul Kıymet Yatırım Fonları, `fundType=YAT`) that pass a set of return
 criteria. A GitHub Actions workflow refreshes the data every weekday
-(Monday to Friday) at 11:00 Istanbul time. A [cron-job.org](https://cron-job.org)
+(Monday to Friday) at 10:15 Istanbul time. A [cron-job.org](https://cron-job.org)
 job starts it, because GitHub starts its own scheduled runs hours late. The
 page shows the time the data was actually fetched.
 
@@ -33,7 +33,7 @@ the page can also list excluded funds with the rule each one broke.
   wrong.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file (giving a history of every update), and
-  deploys `site/` to GitHub Pages. cron-job.org starts it at 11:00 Istanbul
+  deploys `site/` to GitHub Pages. cron-job.org starts it at 10:15 Istanbul
   time on weekdays (see [Daily trigger](#daily-trigger-cron-joborg)). Its own
   GitHub schedule (12:37 Istanbul time, Monday to Friday) is a fallback: it
   does nothing if that day's data is already in, and otherwise fetches it,
@@ -65,7 +65,7 @@ protection to `main`, allow `github-actions[bot]` to push to it.
      (HTTP 401) and you need to create a new one.
 2. On [cron-job.org](https://cron-job.org), create a cron job:
    - **URL:** `https://api.github.com/repos/omertekin2002/fund-returns/actions/workflows/update.yml/dispatches`
-   - **Schedule:** custom, minute `0`, hour `11`, days of week Monday to
+   - **Schedule:** custom, minute `15`, hour `10`, days of week Monday to
      Friday, time zone `Europe/Istanbul`.
    - **Advanced › Request method:** `POST`
    - **Advanced › Headers:**
