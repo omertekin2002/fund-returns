@@ -1,4 +1,5 @@
 import { HORIZONS, RULES, exclusionReason } from "./filter.js";
+import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 
 const COLUMNS = [
   { key: "code", label: "Code", type: "text", value: (f) => f.code },
@@ -11,6 +12,13 @@ const COLUMNS = [
     type: "return",
     value: (f) => f.returns[h.key],
   })),
+  {
+    key: "sharpe",
+    label: "Sharpe",
+    type: "ratio",
+    value: (f) => f.sharpe,
+    title: "Sharpe ratio over the last 4 weeks of daily prices, annualised, against the median money market fund",
+  },
   { key: "reason", label: "Reason", type: "text", value: (f) => f.reason?.detail ?? "" },
 ];
 
@@ -43,6 +51,11 @@ const numberFormat = new Intl.NumberFormat("en-US", {
 function formatReturn(value) {
   if (value === null || value === undefined) return "—";
   return `${numberFormat.format(value)}%`;
+}
+
+function formatRatio(value) {
+  if (value === null || value === undefined) return "—";
+  return numberFormat.format(value);
 }
 
 function formatFetchedAt(iso) {
@@ -94,6 +107,7 @@ function renderHeader() {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = col.label;
+      if (col.title) button.title = col.title;
       if (sorted) button.dataset.dir = state.sortDir;
       button.addEventListener("click", () => {
         if (state.sortKey === col.key) {
@@ -147,6 +161,8 @@ function renderBody() {
         td.append(link);
       } else if (col.type === "return") {
         td.textContent = formatReturn(value);
+      } else if (col.type === "ratio") {
+        td.textContent = formatRatio(value);
       } else if (col.key === "reason" && fund.reason) {
         // Tinted with the colour of the rule's card above the table.
         td.classList.add(`rule-${fund.reason.rule}`);
@@ -199,9 +215,11 @@ async function init() {
     const response = await fetch("data/funds.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    const riskFree = riskFreeReturns(data.funds);
     state.funds = data.funds.map((fund) => ({
       ...fund,
       reason: exclusionReason(fund),
+      sharpe: sharpeRatio(fund.prices, riskFree),
       searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
     }));
     const passing = state.funds.filter((f) => !f.reason).length;

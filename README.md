@@ -23,13 +23,35 @@ A fund is shown only if it breaks none of these rules:
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
 
+## Sharpe ratio
+
+The **Sharpe** column is each fund's Sharpe ratio over the last four weeks of
+daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
+
+- A fund's daily return is its price change from one price date to the next.
+- The risk-free return for each day is the median daily return of the money
+  market funds (Para Piyasası Şemsiye Fonu) in the list. It follows the market
+  rate without being updated by hand, and covers weekends and holidays, when
+  money market funds earn several days of interest at once.
+- The ratio is the mean of the daily excess returns (fund minus risk-free)
+  divided by their standard deviation, annualised by multiplying by √252.
+- Funds with fewer than 10 daily returns in the window (new funds, or gaps in
+  their prices) show no ratio.
+
+Over four weeks the ratio is noisy, and funds with very steady prices (money
+market and short-term funds) can reach large values, positive or negative,
+from small differences against the risk-free return.
+
 ## How it works
 
 - [`scripts/fetch_funds.py`](scripts/fetch_funds.py) calls the JSON API behind
   [TEFAS › Fon Getirileri](https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT)
-  with the page's default settings (funds traded on TEFAS only) and writes
+  with the page's default settings (funds traded on TEFAS only), and the JSON
+  API behind [TEFAS › Fon Verileri](https://www.tefas.gov.tr/tr/fon-verileri)
+  for each fund's daily prices over the last four weeks (TEFAS allows at most
+  one month per request). It writes both to
   [`site/data/funds.json`](site/data/funds.json). It uses only the Python
-  standard library and refuses to overwrite the file if the response looks
+  standard library and refuses to overwrite the file if a response looks
   wrong.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file (giving a history of every update), and
@@ -83,5 +105,5 @@ protection to `main`, allow `github-actions[bot]` to push to it.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # filter rule tests (Node 20+)
+npm test        # filter rule and Sharpe ratio tests (Node 20+)
 ```

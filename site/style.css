@@ -314,7 +314,8 @@ th button[data-dir="desc"]::after {
 }
 
 .col-return,
-.col-number {
+.col-number,
+.col-ratio {
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
