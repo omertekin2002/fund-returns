@@ -1,11 +1,12 @@
 name: Update fund data and deploy site
 
 on:
+  # A cron-job.org job starts this workflow through the API at 11:00
+  # Istanbul time on weekdays (see README), because GitHub starts scheduled
+  # runs hours late. This schedule (12:37 Istanbul, Mon-Fri) is only a
+  # fallback in case that call fails: it skips itself once today's data is in.
   schedule:
-    # Weekdays at 08:07 UTC = 11:07 in Türkiye (UTC+3), same day. Kept off
-    # minute 0: GitHub delays scheduled runs at the start of the hour the
-    # most (runs set for 08:00 started 5-7 hours late).
-    - cron: "7 8 * * 1-5"
+    - cron: "37 9 * * 1-5"
   workflow_dispatch:
   # Pushes to main redeploy the site with the data already in the repo.
   push:
@@ -21,15 +22,31 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the refreshed data file
+    outputs:
+      skip: ${{ steps.today.outputs.skip }}
     steps:
       - uses: actions/checkout@v7
 
+      # Read the data file from the tip of the branch, not the checkout: this
+      # run may have been queued before the 11:00 run committed.
+      - name: Check whether today's data is already in
+        id: today
+        if: github.event_name == 'schedule'
+        run: |
+          git fetch --quiet --depth=1 origin "$GITHUB_REF_NAME"
+          fetched_at=$(git show FETCH_HEAD:site/data/funds.json \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["fetchedAt"])')
+          if [ "$(TZ=Europe/Istanbul date -d "$fetched_at" +%F)" = "$(TZ=Europe/Istanbul date +%F)" ]; then
+            echo "Data was already fetched today ($fetched_at); skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fetch fund returns from TEFAS
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
         run: python3 scripts/fetch_funds.py site/data/funds.json
 
       - name: Commit updated data
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -43,11 +60,13 @@ jobs:
           git push origin "HEAD:$GITHUB_REF_NAME"
 
       - uses: actions/upload-pages-artifact@v5
+        if: steps.today.outputs.skip != 'true'
         with:
           path: site
 
   deploy:
     needs: build
+    if: needs.build.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       pages: write

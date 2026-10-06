@@ -3,9 +3,9 @@
 A static site on GitHub Pages that lists TEFAS securities investment funds
 (Menkul Kıymet Yatırım Fonları, `fundType=YAT`) that pass a set of return
 criteria. A GitHub Actions workflow refreshes the data every weekday
-(Monday to Friday) at about 11:07 Istanbul time (08:07 UTC). GitHub can
-start scheduled runs late when Actions is busy, so the page shows the time
-the data was actually fetched.
+(Monday to Friday) at 11:00 Istanbul time. A [cron-job.org](https://cron-job.org)
+job starts it, because GitHub starts its own scheduled runs hours late. The
+page shows the time the data was actually fetched.
 
 ## Criteria
 
@@ -32,8 +32,12 @@ the page can also list excluded funds with the rule each one broke.
   standard library and refuses to overwrite the file if the response looks
   wrong.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
-  script on schedule, commits the new data file (giving a history of every
-  update), and deploys `site/` to GitHub Pages. Pushes to `main` redeploy the site without
+  script, commits the new data file (giving a history of every update), and
+  deploys `site/` to GitHub Pages. cron-job.org starts it at 11:00 Istanbul
+  time on weekdays (see [Daily trigger](#daily-trigger-cron-joborg)). Its own
+  GitHub schedule (12:37 Istanbul time, Monday to Friday) is a fallback: it
+  does nothing if that day's data is already in, and otherwise fetches it,
+  usually a few hours late. Pushes to `main` redeploy the site without
   fetching. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
 
@@ -50,6 +54,29 @@ black page frame, flat colour blocks, Arial Black headings over Times body).
 
 The workflow commits the data file to `main` itself; if you add branch
 protection to `main`, allow `github-actions[bot]` to push to it.
+
+### Daily trigger (cron-job.org)
+
+1. Create a GitHub token: **Settings › Developer settings › Personal access
+   tokens › Fine-grained tokens › Generate new token**.
+   - **Repository access:** Only select repositories › `fund-returns`.
+   - **Permissions:** Repository permissions › **Actions: Read and write**.
+   - Copy the token. When it expires, the cron-job.org job starts failing
+     (HTTP 401) and you need to create a new one.
+2. On [cron-job.org](https://cron-job.org), create a cron job:
+   - **URL:** `https://api.github.com/repos/omertekin2002/fund-returns/actions/workflows/update.yml/dispatches`
+   - **Schedule:** custom, minute `0`, hour `11`, days of week Monday to
+     Friday, time zone `Europe/Istanbul`.
+   - **Advanced › Request method:** `POST`
+   - **Advanced › Headers:**
+     - `Accept: application/vnd.github+json`
+     - `Authorization: Bearer <token>`
+     - `X-GitHub-Api-Version: 2022-11-28`
+     - `Content-Type: application/json`
+   - **Advanced › Request body:** `{"ref":"main"}`
+   - Turn on the email notification for failed runs.
+3. Use **Test run**. GitHub answers `204 No Content`, and a new
+   `workflow_dispatch` run appears in the Actions tab.
 
 ## Local development
 
