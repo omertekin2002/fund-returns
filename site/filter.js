@@ -1,5 +1,6 @@
 // Screening rules for the fund list. Returns are cumulative percentages
 // (e.g. 3.5 means +3.5%) keyed by horizon: 1m, 3m, 6m, 1y, ytd, 3y, 5y.
+// "sharpe" is the fund's 4-week Sharpe ratio from sharpe.js, or null.
 
 export const HORIZONS = [
   { key: "1m", label: "1M" },
@@ -25,6 +26,10 @@ export const MINIMUM_RETURNS = [
 // changes through the year.
 export const ORDERED_HORIZONS = ["1m", "3m", "6m", "1y", "3y", "5y"];
 
+// Minimum 4-week Sharpe ratio. A fund without one (fewer than 10 daily
+// returns in the window) is allowed.
+export const MIN_SHARPE = 1;
+
 export const RULES = [
   { id: "min-1m", title: "1-month return", text: "Out if it is missing or below 3%." },
   { id: "min-3m", title: "3-month return", text: "Out if it is below 9%. A missing value is allowed." },
@@ -35,6 +40,7 @@ export const RULES = [
     title: "Longer beats shorter",
     text: "Out if any longer period (1M, 3M, 6M, 1Y, 3Y, 5Y) returned less than a shorter one. YTD is not compared.",
   },
+  { id: "min-sharpe", title: "Sharpe ratio", text: "Out if the 4-week Sharpe ratio is below 1.0. A missing value is allowed." },
 ];
 
 const label = (key) => HORIZONS.find((h) => h.key === key).label;
@@ -71,6 +77,10 @@ export function exclusionReason(fund) {
         };
       }
     }
+  }
+
+  if (!isMissing(fund.sharpe) && fund.sharpe < MIN_SHARPE) {
+    return { rule: "min-sharpe", detail: `Sharpe ${fund.sharpe.toFixed(2)} < ${MIN_SHARPE.toFixed(1)}` };
   }
 
   return null;

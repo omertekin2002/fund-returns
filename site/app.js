@@ -216,20 +216,22 @@ async function init() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const riskFree = riskFreeReturns(data.funds);
-    state.funds = data.funds.map((fund) => ({
-      ...fund,
-      reason: exclusionReason(fund),
-      sharpe: sharpeRatio(fund.prices, riskFree),
-      searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
-    }));
+    state.funds = data.funds.map((raw) => {
+      const fund = { ...raw, sharpe: sharpeRatio(raw.prices, riskFree) };
+      return {
+        ...fund,
+        reason: exclusionReason(fund),
+        searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
+      };
+    });
     const passing = state.funds.filter((f) => !f.reason).length;
     els.sticker.textContent = `${countFormat.format(passing)} funds pass`;
     els.updated.textContent = `Updated ${formatFetchedAt(data.fetchedAt)}`;
     els.updated.title = "Istanbul time";
     els.status.textContent =
       `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
-      "funds traded on TEFAS are checked against five rules. " +
-      `${countFormat.format(passing)} pass all five and are listed above.`;
+      "funds traded on TEFAS are checked against six rules. " +
+      `${countFormat.format(passing)} pass all six and are listed above.`;
   } catch (error) {
     els.sticker.textContent = "No data";
     els.status.textContent = `Could not load fund data: ${error.message}`;

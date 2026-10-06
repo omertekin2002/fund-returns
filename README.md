@@ -2,7 +2,7 @@
 
 A static site on GitHub Pages that lists TEFAS securities investment funds
 (Menkul Kıymet Yatırım Fonları, `fundType=YAT`) that pass a set of return
-criteria. A GitHub Actions workflow refreshes the data every weekday
+and Sharpe ratio criteria. A GitHub Actions workflow refreshes the data every weekday
 (Monday to Friday) at 10:15 Istanbul time. A [cron-job.org](https://cron-job.org)
 job starts it, because GitHub starts its own scheduled runs hours late. The
 page shows the time the data was actually fetched.
@@ -19,6 +19,8 @@ A fund is shown only if it breaks none of these rules:
    1M, 3M, 6M, 1Y, 3Y and 5Y where both returns exist (e.g. 3Y below 1Y).
    Year-to-date is not part of this check because its length changes through
    the year.
+6. The 4-week Sharpe ratio (see [below](#sharpe-ratio)) is below 1.0 (a fund
+   without a ratio is allowed).
 
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.

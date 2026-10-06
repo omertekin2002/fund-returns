@@ -53,3 +53,21 @@ test("reports a readable detail", () => {
     detail: "3Y 50.00% < 1Y 60.00%",
   });
 });
+
+test("a Sharpe ratio below 1.0 excludes the fund; a missing one is allowed", () => {
+  const passing = { "1m": 3, "3m": 9, "6m": 19, "1y": 42.5 };
+  const withSharpe = (sharpe) => exclusionReason({ ...fund(passing), sharpe })?.rule ?? null;
+  assert.equal(withSharpe(0.99), "min-sharpe");
+  assert.equal(withSharpe(-3), "min-sharpe");
+  assert.equal(withSharpe(1), null);
+  assert.equal(withSharpe(null), null);
+  assert.equal(withSharpe(undefined), null);
+  assert.deepEqual(exclusionReason({ ...fund(passing), sharpe: 0.456 }), {
+    rule: "min-sharpe",
+    detail: "Sharpe 0.46 < 1.0",
+  });
+});
+
+test("return rules are reported before the Sharpe rule", () => {
+  assert.equal(exclusionReason({ ...fund({ "1m": 2 }), sharpe: 0.5 }).rule, "min-1m");
+});

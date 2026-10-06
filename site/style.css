@@ -17,6 +17,7 @@
   --tint-peach: #e6915d;
   --tint-lime: #c0d4a7;
   --tint-sky: #9ab6c8;
+  --tint-steel: #a5b8c0;
   --tint-periwinkle: #8c9ae0;
 
   --font-display: "Arial Black", "Arial Bold", Gadget, Helvetica, Arial, sans-serif;
@@ -207,6 +208,10 @@ h1 {
 
 .rule-order {
   background: var(--tint-peach);
+}
+
+.rule-min-sharpe {
+  background: var(--tint-steel);
 }
 
 /* ─── Fund table ─── */
