@@ -64,6 +64,10 @@ from small differences against the risk-free return.
   usually a few hours late. Pushes to `main` redeploy the site without
   fetching. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
+- [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`
+  (see [Local development](#local-development)) on every pull request and on
+  every push to `main`, with read-only access to the repository. It does not
+  hold back the daily update or the deploy.
 
 The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
 black page frame, flat colour blocks, Arial Black headings over Times body).
@@ -107,5 +111,13 @@ protection to `main`, allow `github-actions[bot]` to push to it.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # filter rule and Sharpe ratio tests (Node 20+)
+npm test        # all tests (Node 20+ and Python 3)
 ```
+
+`npm test` runs the filter rule and Sharpe ratio tests (`node --test`), then
+the fetch script tests in
+[`tests/test_fetch_funds.py`](tests/test_fetch_funds.py)
+(`python3 -m unittest discover -s tests -v`), and fails if either suite
+fails. The fetch script tests cover its parsing, validation, output format,
+retries and atomic write with fixtures and mocks, so they need no network
+and no packages.
