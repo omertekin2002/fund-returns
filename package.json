@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test && python3 -m unittest discover -s tests -v",
     "fetch": "python3 scripts/fetch_funds.py",
     "serve": "python3 -m http.server --directory site 8000"
   }

@@ -1,0 +1,25 @@
+name: Tests
+
+# Runs `npm test` (the filter, Sharpe ratio and fetch script tests) on every
+# pull request and on pushes to main. It only reads the repository.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Node 20 is the oldest version the README supports.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      # The fetch script tests use the runner's python3, as update.yml does.
+      - run: npm test
