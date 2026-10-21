@@ -111,7 +111,7 @@ protection to `main`, allow `github-actions[bot]` to push to it.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # all tests (Node 20+ and Python 3)
+npm test        # all tests (Node 20+ and Python 3.9+)
 ```
 
 `npm test` runs the filter rule and Sharpe ratio tests (`node --test`), then
