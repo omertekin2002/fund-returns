@@ -5,7 +5,9 @@ A static site on GitHub Pages that lists TEFAS securities investment funds
 and Sharpe ratio criteria. A GitHub Actions workflow refreshes the data every weekday
 (Monday to Friday) at 10:15 Istanbul time. A [cron-job.org](https://cron-job.org)
 job starts it, because GitHub starts its own scheduled runs hours late. The
-page shows the time the data was actually fetched.
+page shows the time the data was actually fetched, and shows a warning when a
+whole weekday has gone by without an update (see
+[`site/freshness.js`](site/freshness.js)).
 
 ## Criteria
 
@@ -114,8 +116,8 @@ npm run serve   # http://localhost:8000
 npm test        # all tests (Node 20+ and Python 3.9+)
 ```
 
-`npm test` runs the filter rule and Sharpe ratio tests (`node --test`), then
-the fetch script tests in
+`npm test` runs the filter rule, Sharpe ratio and data freshness tests
+(`node --test`), then the fetch script tests in
 [`tests/test_fetch_funds.py`](tests/test_fetch_funds.py)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
