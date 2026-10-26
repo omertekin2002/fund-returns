@@ -64,6 +64,57 @@ jobs:
         with:
           path: site
 
+  # On the fallback run, tell the owner when cron-job.org didn't start the
+  # 10:15 run (usually an expired token, see README). This job is separate
+  # from build and deploy, so its failure never holds back the data update.
+  trigger-check:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out scripts/check_trigger.py
+      actions: read # list this workflow's runs
+      issues: write # open, comment on or close the alert issue
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: trigger-missed
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check whether the 10:15 trigger started a run
+        id: check
+        run: |
+          gh run list --workflow update.yml --event workflow_dispatch \
+            --limit 20 --json createdAt,event > "$RUNNER_TEMP/runs.json"
+          gh issue list --label "$LABEL" --state open --json number \
+            > "$RUNNER_TEMP/issues.json"
+          python3 scripts/check_trigger.py \
+            "$RUNNER_TEMP/runs.json" "$RUNNER_TEMP/issues.json" \
+            --owner "$GITHUB_REPOSITORY_OWNER" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --readme-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY#daily-trigger-cron-joborg" \
+            --message-file "$RUNNER_TEMP/message.md" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue about the missed trigger
+        if: steps.check.outputs.action == 'open'
+        run: |
+          gh label create "$LABEL" --color D93F0B \
+            --description "The 10:15 cron-job.org trigger didn't start the update" \
+            2>/dev/null || true
+          gh issue create --label "$LABEL" \
+            --title "⚠️ The 10:15 daily trigger didn't run" \
+            --body-file "$RUNNER_TEMP/message.md"
+
+      - name: Comment on the open missed-trigger issue
+        if: steps.check.outputs.action == 'comment'
+        run: gh issue comment "${{ steps.check.outputs.issue }}" --body-file "$RUNNER_TEMP/message.md"
+
+      - name: Close the missed-trigger issue
+        if: steps.check.outputs.action == 'close'
+        run: |
+          gh issue comment "${{ steps.check.outputs.issue }}" --body-file "$RUNNER_TEMP/message.md"
+          gh issue close "${{ steps.check.outputs.issue }}"
+
   deploy:
     needs: build
     if: needs.build.outputs.skip != 'true'
