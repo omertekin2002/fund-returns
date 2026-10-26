@@ -67,9 +67,10 @@ from small differences against the risk-free return.
   fetching. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
 - [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`
-  (see [Local development](#local-development)) on every pull request and on
-  every push to `main`, with read-only access to the repository. It does not
-  hold back the daily update or the deploy.
+  and the page tests (`npm run test:e2e`, see
+  [Local development](#local-development)) as two jobs on every pull request
+  and on every push to `main`, with read-only access to the repository. It
+  does not hold back the daily update or the deploy.
 
 The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
 black page frame, flat colour blocks, Arial Black headings over Times body).
@@ -113,7 +114,8 @@ protection to `main`, allow `github-actions[bot]` to push to it.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # all tests (Node 20+ and Python 3.9+)
+npm test        # unit tests (Node 20+ and Python 3.9+)
+npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
 `npm test` runs the filter rule, Sharpe ratio and data freshness tests
@@ -123,3 +125,15 @@ npm test        # all tests (Node 20+ and Python 3.9+)
 fails. The fetch script tests cover its parsing, validation, output format,
 retries and atomic write with fixtures and mocks, so they need no network
 and no packages.
+
+`npm test` needs no `npm install`. The page tests do: run `npm ci` and
+`npx playwright install chromium` once, then `npm run test:e2e`. They serve
+`site/` on `http://127.0.0.1:8137` and open it in headless Chromium with
+[Playwright](https://playwright.dev), using the committed
+`site/data/funds.json`. The specs in [`e2e/`](e2e/) check that the page loads
+without errors; that the sticker, the Passing / Excluded / All counts and the
+rule cards match the numbers worked out from the data with `filter.js` and
+`sharpe.js`; that the table lists the right rows (with a Reason column only
+for excluded funds); that search and column sorting work; that the stale data
+warning appears only when the data is old; and that a failed data request
+shows an error.
