@@ -1,7 +1,8 @@
 name: Tests
 
-# Runs `npm test` (the filter, Sharpe ratio and fetch script tests) on every
-# pull request and on pushes to main. It only reads the repository.
+# Runs `npm test` (the filter, Sharpe ratio and fetch script tests) and
+# `npm run test:e2e` (the page in headless Chromium) on every pull request and
+# on pushes to main. It only reads the repository.
 on:
   pull_request:
   push:
@@ -23,3 +24,20 @@ jobs:
 
       # The fetch script tests use the runner's python3, as update.yml does.
       - run: npm test
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      # Installs the Playwright version pinned in package-lock.json, then the
+      # Chromium build that version expects. The page is served with the
+      # runner's python3.
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

@@ -127,6 +127,20 @@ h1 {
   white-space: nowrap;
 }
 
+/* Shown only when the daily update has missed a weekday: a sticker-yellow
+   strip under the banner whose text says what is wrong. */
+.stale-warning {
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: var(--hairline);
+  background: var(--yellow-sticker);
+  color: var(--ink);
+  font: 700 14px/1.3 var(--font-ui);
+}
+
+.stale-warning[hidden] {
+  display: none;
+}
+
 /* ─── About (below the table): red panel rail + criteria ─── */
 
 .about {

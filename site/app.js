@@ -1,4 +1,5 @@
 import { HORIZONS, RULES, exclusionReason } from "./filter.js";
+import { isStale } from "./freshness.js";
 import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 
 const COLUMNS = [
@@ -34,6 +35,7 @@ const els = {
   status: document.getElementById("status"),
   sticker: document.getElementById("pass-sticker"),
   updated: document.getElementById("updated"),
+  stale: document.getElementById("stale"),
   rules: document.getElementById("rules"),
   headerRow: document.getElementById("header-row"),
   body: document.querySelector("#funds tbody"),
@@ -58,12 +60,15 @@ function formatRatio(value) {
   return numberFormat.format(value);
 }
 
+// Null when the time is missing or unparseable.
 function formatFetchedAt(iso) {
+  const date = new Date(iso);
+  if (typeof iso !== "string" || Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/Istanbul",
     dateStyle: "medium",
     timeStyle: "short",
-  }).format(new Date(iso));
+  }).format(date);
 }
 
 // Lower-case with Turkish rules so "İ"/"I" match "i"/"ı" typed in search.
@@ -226,12 +231,21 @@ async function init() {
     });
     const passing = state.funds.filter((f) => !f.reason).length;
     els.sticker.textContent = `${countFormat.format(passing)} funds pass`;
-    els.updated.textContent = `Updated ${formatFetchedAt(data.fetchedAt)}`;
+    const fetchedAt = formatFetchedAt(data.fetchedAt);
+    const stale = isStale(data.fetchedAt);
+    els.updated.textContent = fetchedAt ? `Updated ${fetchedAt}` : "Update time unknown";
     els.updated.title = "Istanbul time";
     els.status.textContent =
       `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against six rules. " +
-      `${countFormat.format(passing)} pass all six and are listed above.`;
+      `${countFormat.format(passing)} pass all six and are listed above.` +
+      (stale ? " The latest daily update is missing, so these figures may be out of date." : "");
+    if (stale) {
+      els.stale.textContent = fetchedAt
+        ? `Data may be out of date: last updated ${fetchedAt} Istanbul time. The daily update has not run since.`
+        : "Data may be out of date: the time of the last update is unknown.";
+      els.stale.hidden = false;
+    }
   } catch (error) {
     els.sticker.textContent = "No data";
     els.status.textContent = `Could not load fund data: ${error.message}`;
