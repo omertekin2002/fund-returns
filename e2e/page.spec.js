@@ -1,7 +1,17 @@
 // Run with: npm run test:e2e
 import { test, expect } from "@playwright/test";
 import { RULES } from "../site/filter.js";
-import { data, excluded, formatCount, funds, normalize, passing, ruleCounts } from "./expected.js";
+import {
+  data,
+  excluded,
+  filtered,
+  formatCount,
+  funds,
+  normalize,
+  passing,
+  ruleCounts,
+  umbrellas,
+} from "./expected.js";
 
 const rows = (page) => page.locator("#funds tbody tr");
 const header = (page, key) => page.locator(`#header-row th.col-${key}`);
@@ -209,6 +219,193 @@ test.describe("URL state", () => {
     await expect(header(page, "1m")).toHaveAttribute("aria-sort", "descending");
     await expect.poll(() => search(page)).toBe("");
     expect(errors).toEqual([]);
+  });
+});
+
+test.describe("type and risk filters", () => {
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+  const typeFilter = (page) => page.locator("#type-filter");
+  const riskFilter = (page) => page.locator("#risk-filter");
+  // Equity funds at risk 6: the issue's example, and a large group in the data.
+  const TYPE = "Hisse Senedi Şemsiye Fonu";
+  const RISK = "6";
+
+  async function expectCounts(page, { passing, excluded, all }) {
+    await expect(page.locator('[data-count="passing"]')).toHaveText(formatCount(passing.length));
+    await expect(page.locator('[data-count="excluded"]')).toHaveText(formatCount(excluded.length));
+    await expect(page.locator('[data-count="all"]')).toHaveText(formatCount(all.length));
+  }
+
+  // The sticker, the status text and the rule cards always describe every fund.
+  async function expectGlobalSummary(page) {
+    await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+    await expect(page.locator("#status")).toContainText(
+      `all ${formatCount(funds.length)} funds traded on TEFAS are checked against six rules. ` +
+        `${formatCount(passing.length)} pass all six`,
+    );
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+  }
+
+  async function expectRows(page, { type, risk }) {
+    for (const text of await page.locator("#funds tbody td.col-umbrella").allTextContents()) {
+      if (type) expect(text).toBe(type);
+    }
+    for (const text of await page.locator("#funds tbody td.col-risk").allTextContents()) {
+      if (risk) expect(text).toBe(risk);
+    }
+  }
+
+  test("list every fund type in the data and every risk level, with no filter by default", async ({ page }) => {
+    expect(umbrellas).toContain(TYPE);
+    await open(page);
+    await expect(typeFilter(page).locator("option")).toHaveText(["All types", ...umbrellas]);
+    const values = await typeFilter(page)
+      .locator("option")
+      .evaluateAll((options) => options.map((o) => o.value));
+    expect(values).toEqual(["", ...umbrellas]);
+    await expect(riskFilter(page).locator("option")).toHaveText([
+      "All risk levels",
+      ...["1", "2", "3", "4", "5", "6", "7"].map((n) => `Risk ${n}`),
+    ]);
+    await expect(typeFilter(page)).toHaveValue("");
+    await expect(riskFilter(page)).toHaveValue("");
+    await expect(typeFilter(page)).toHaveAccessibleName("Fund type");
+    await expect(riskFilter(page)).toHaveAccessibleName("Risk level");
+    await expect(rows(page)).toHaveCount(passing.length);
+    await expectCounts(page, { passing, excluded, all: funds });
+  });
+
+  test("narrow the rows and the view counts, but not the summary", async ({ page }) => {
+    const byType = filtered({ type: TYPE });
+    const byRisk = filtered({ risk: RISK });
+    const both = filtered({ type: TYPE, risk: RISK });
+    expect(both.all.length).toBeGreaterThan(0);
+    expect(both.all.length).toBeLessThan(byType.all.length);
+
+    await open(page);
+    await typeFilter(page).selectOption(TYPE);
+    await expectCounts(page, byType);
+    await expect(rows(page)).toHaveCount(byType.passing.length);
+    await expectRows(page, { type: TYPE });
+    await expectGlobalSummary(page);
+
+    await riskFilter(page).selectOption(RISK);
+    await expectCounts(page, both);
+    await expect(rows(page)).toHaveCount(both.passing.length);
+    await page.locator('[data-view="excluded"]').click();
+    await expect(rows(page)).toHaveCount(both.excluded.length);
+    await page.locator('[data-view="all"]').click();
+    await expect(rows(page)).toHaveCount(both.all.length);
+    await expectRows(page, { type: TYPE, risk: RISK });
+    await expectGlobalSummary(page);
+
+    // A risk filter never shows funds without a risk level.
+    await typeFilter(page).selectOption("");
+    await expectCounts(page, byRisk);
+    await expect(rows(page)).toHaveCount(byRisk.all.length);
+    await expect(page.locator("#funds tbody td.col-risk", { hasText: "—" })).toHaveCount(0);
+    await expectRows(page, { risk: RISK });
+
+    // The search narrows the rows further but leaves the counts alone.
+    await typeFilter(page).selectOption(TYPE);
+    const term = normalize(both.all[0].code);
+    const matching = both.all.filter((f) => normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(term));
+    await page.locator("#search").fill(both.all[0].code);
+    await expect(rows(page)).toHaveCount(matching.length);
+    await expectCounts(page, both);
+
+    // Back to no filters: the table as it was.
+    await page.locator("#search").fill("");
+    await typeFilter(page).selectOption("");
+    await riskFilter(page).selectOption("");
+    await expectCounts(page, { passing, excluded, all: funds });
+    await expect(rows(page)).toHaveCount(funds.length);
+  });
+
+  test("are written to the URL and restored from it", async ({ page }) => {
+    await open(page);
+    const historyLength = await page.evaluate(() => history.length);
+    await typeFilter(page).selectOption(TYPE);
+    await expect.poll(() => params(page)).toEqual({ type: TYPE });
+    await riskFilter(page).selectOption(RISK);
+    await expect.poll(() => params(page)).toEqual({ type: TYPE, risk: RISK });
+    await page.locator('[data-view="all"]').click();
+    await expect.poll(() => params(page)).toEqual({ view: "all", type: TYPE, risk: RISK });
+    expect(new URL(page.url()).search).toBe("?view=all&type=Hisse+Senedi+%C5%9Eemsiye+Fonu&risk=6");
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+
+    await page.reload();
+    await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+    await expect(typeFilter(page)).toHaveValue(TYPE);
+    await expect(riskFilter(page)).toHaveValue(RISK);
+    await expect(rows(page)).toHaveCount(filtered({ type: TYPE, risk: RISK }).all.length);
+
+    await typeFilter(page).selectOption("");
+    await riskFilter(page).selectOption("");
+    await expect.poll(() => params(page)).toEqual({ view: "all" });
+  });
+
+  test("open from a shared link", async ({ page }) => {
+    const both = filtered({ type: TYPE, risk: RISK });
+    await open(page, "?type=Hisse+Senedi+%C5%9Eemsiye+Fonu&risk=6");
+    await expect(typeFilter(page)).toHaveValue(TYPE);
+    await expect(riskFilter(page)).toHaveValue(RISK);
+    await expectCounts(page, both);
+    await expect(rows(page)).toHaveCount(both.passing.length);
+    await expectGlobalSummary(page);
+  });
+
+  test("ignore an unknown type and an invalid risk without errors", async ({ page }) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    await open(page, "?view=all&type=No+Such+Type&risk=9");
+    await expect(typeFilter(page)).toHaveValue("");
+    await expect(riskFilter(page)).toHaveValue("");
+    await expect(rows(page)).toHaveCount(funds.length);
+    await expectCounts(page, { passing, excluded, all: funds });
+    await expect.poll(() => params(page)).toEqual({ view: "all" });
+
+    // A valid risk is kept when the type is dropped.
+    await open(page, `?type=${encodeURIComponent(TYPE.toLowerCase())}&risk=${RISK}`);
+    await expect(typeFilter(page)).toHaveValue("");
+    await expect(riskFilter(page)).toHaveValue(RISK);
+    await expect.poll(() => params(page)).toEqual({ risk: RISK });
+    expect(errors).toEqual([]);
+  });
+
+  test("can be used from the keyboard", async ({ page }) => {
+    await open(page);
+    await page.locator('[data-view="all"]').focus();
+    await page.keyboard.press("Tab");
+    await expect(typeFilter(page)).toBeFocused();
+    const outline = await typeFilter(page).evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(outline).not.toBe("none");
+    await page.keyboard.press("ArrowDown");
+    await expect(typeFilter(page)).toHaveValue(umbrellas[0]);
+    await expect(rows(page)).toHaveCount(filtered({ type: umbrellas[0] }).passing.length);
+
+    await page.keyboard.press("Tab");
+    await expect(riskFilter(page)).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(riskFilter(page)).toHaveValue("1");
+    await expect.poll(() => params(page)).toEqual({ type: umbrellas[0], risk: "1" });
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#search")).toBeFocused();
+  });
+
+  test("fit the controls row on a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page);
+    for (const selector of ["[data-view='all']", "#type-filter", "#risk-filter", "#search"]) {
+      const box = await page.locator(selector).boundingBox();
+      expect(box.x, selector).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, selector).toBeLessThanOrEqual(320);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
 });
 
