@@ -8,9 +8,15 @@ job starts it, because GitHub starts its own scheduled runs hours late. The
 page shows the time the data was actually fetched, and shows a warning when a
 whole weekday has gone by without an update (see
 [`site/freshness.js`](site/freshness.js)).
-The page URL keeps the view, sort and search (e.g.
-`?view=excluded&sort=sharpe&dir=asc&q=ata`), so links can be shared (see
-[`site/urlstate.js`](site/urlstate.js)).
+The table can be narrowed to one fund type (umbrella) and one risk level
+(1–7, exactly that level; funds with no risk level only show without a risk
+filter). The Passing / Excluded / All counts follow these filters; the
+sticker, the summary and the rule cards always count every fund.
+The page URL keeps the view, sort, search and filters (e.g.
+`?view=excluded&sort=sharpe&dir=asc&q=ata` or
+`?type=Hisse+Senedi+Şemsiye+Fonu&risk=6`), so links can be shared (see
+[`site/urlstate.js`](site/urlstate.js)). A type that matches no fund, or a
+risk outside 1–7, is ignored.
 
 ## Criteria
 
@@ -162,6 +168,9 @@ without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
 `sharpe.js`; that the table lists the right rows (with a Reason column only
 for excluded funds); that search and column sorting work, and are kept in
-and restored from the URL; that the stale data
+and restored from the URL; that the type and risk filters list the types in
+the data, narrow the rows and view counts (but not the sticker or rule
+cards), work from the keyboard and at 320 px wide, and are kept in and
+restored from the URL, with unknown values ignored; that the stale data
 warning appears only when the data is old; and that a failed data request
 shows an error.

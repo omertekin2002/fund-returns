@@ -25,3 +25,15 @@ export const formatCount = (n) => new Intl.NumberFormat("en-US").format(n);
 
 // Lower-case with Turkish rules, as the page's search does.
 export const normalize = (text) => text.toLocaleLowerCase("tr-TR");
+
+// The fund types in the data, in the order of the type filter's options.
+export const umbrellas = [...new Set(funds.map((f) => f.umbrella).filter(Boolean))].sort((a, b) =>
+  a.localeCompare(b, "tr"),
+);
+
+// The funds the type and risk filters leave ("" means no filter), as
+// { all, passing, excluded }.
+export function filtered({ type = "", risk = "" } = {}) {
+  const all = funds.filter((f) => (!type || f.umbrella === type) && (!risk || f.risk === Number(risk)));
+  return { all, passing: all.filter((f) => !f.reason), excluded: all.filter((f) => f.reason) };
+}

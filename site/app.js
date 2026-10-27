@@ -4,7 +4,7 @@ import { isStale } from "./freshness.js";
 import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
-// View, sort and search start from the page URL, so links can be shared.
+// View, sort, search and filters start from the page URL, so links can be shared.
 const state = {
   funds: [],
   ...parseState(location.search),
@@ -20,6 +20,8 @@ const els = {
   body: document.querySelector("#funds tbody"),
   empty: document.getElementById("empty"),
   search: document.getElementById("search"),
+  typeFilter: document.getElementById("type-filter"),
+  riskFilter: document.getElementById("risk-filter"),
   viewButtons: document.querySelectorAll("[data-view]"),
 };
 
@@ -119,10 +121,18 @@ function compare(a, b, col) {
   return state.sortDir === "asc" ? result : -result;
 }
 
+// Funds of the chosen type and risk level. A risk filter never matches funds
+// with no risk level.
+function filteredFunds() {
+  return state.funds
+    .filter((f) => !state.type || f.umbrella === state.type)
+    .filter((f) => !state.risk || f.risk === Number(state.risk));
+}
+
 function selectedFunds() {
   const query = normalize(state.query.trim());
   const col = COLUMNS.find((c) => c.key === state.sortKey);
-  return state.funds
+  return filteredFunds()
     .filter((f) => state.view === "all" || (state.view === "passing") === !f.reason)
     .filter((f) => !query || f.searchText.includes(query))
     .sort((a, b) => compare(a, b, col) || a.code.localeCompare(b.code));
@@ -162,9 +172,11 @@ function renderBody() {
   els.empty.hidden = rows.length > 0;
 }
 
+// The view counts follow the type and risk filters but not the search.
 function renderCounts() {
-  const passing = state.funds.filter((f) => !f.reason).length;
-  const counts = { passing, excluded: state.funds.length - passing, all: state.funds.length };
+  const funds = filteredFunds();
+  const passing = funds.filter((f) => !f.reason).length;
+  const counts = { passing, excluded: funds.length - passing, all: funds.length };
   for (const el of document.querySelectorAll("[data-count]")) {
     el.textContent = countFormat.format(counts[el.dataset.count]);
   }
@@ -173,7 +185,8 @@ function renderCounts() {
   }
 }
 
-// Keeps the view, sort and search in the URL without adding history entries.
+// Keeps the view, sort, search and filters in the URL without adding history
+// entries.
 function updateUrl() {
   const url = `${location.pathname}${serializeState(state)}${location.hash}`;
   history.replaceState(history.state, "", url);
@@ -203,6 +216,16 @@ async function init() {
       render();
     });
   }
+  els.riskFilter.value = state.risk;
+  for (const [key, select] of [
+    ["type", els.typeFilter],
+    ["risk", els.riskFilter],
+  ]) {
+    select.addEventListener("change", () => {
+      state[key] = select.value;
+      render();
+    });
+  }
 
   try {
     const response = await fetch("data/funds.json", { cache: "no-cache" });
@@ -217,6 +240,21 @@ async function init() {
         searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
       };
     });
+    // The type options are the umbrellas in the data; a type from the URL that
+    // matches none of them is dropped.
+    const umbrellas = [...new Set(state.funds.map((f) => f.umbrella).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b, "tr"),
+    );
+    els.typeFilter.append(
+      ...umbrellas.map((umbrella) => {
+        const option = document.createElement("option");
+        option.value = umbrella;
+        option.textContent = umbrella;
+        return option;
+      }),
+    );
+    if (!umbrellas.includes(state.type)) state.type = "";
+    els.typeFilter.value = state.type;
     const passing = state.funds.filter((f) => !f.reason).length;
     els.sticker.textContent = `${countFormat.format(passing)} funds pass`;
     const fetchedAt = formatFetchedAt(data.fetchedAt);
