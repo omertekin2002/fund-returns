@@ -1,34 +1,13 @@
-import { HORIZONS, RULES, exclusionReason } from "./filter.js";
+import { COLUMNS } from "./columns.js";
+import { RULES, exclusionReason } from "./filter.js";
 import { isStale } from "./freshness.js";
 import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
+import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
-const COLUMNS = [
-  { key: "code", label: "Code", type: "text", value: (f) => f.code },
-  { key: "name", label: "Fund", type: "text", value: (f) => f.name },
-  { key: "umbrella", label: "Type", type: "text", value: (f) => f.umbrella },
-  { key: "risk", label: "Risk", type: "number", value: (f) => f.risk },
-  ...HORIZONS.map((h) => ({
-    key: h.key,
-    label: h.label,
-    type: "return",
-    value: (f) => f.returns[h.key],
-  })),
-  {
-    key: "sharpe",
-    label: "Sharpe",
-    type: "ratio",
-    value: (f) => f.sharpe,
-    title: "Sharpe ratio over the last 4 weeks of daily prices, annualised, against the median money market fund",
-  },
-  { key: "reason", label: "Reason", type: "text", value: (f) => f.reason?.detail ?? "" },
-];
-
+// View, sort and search start from the page URL, so links can be shared.
 const state = {
   funds: [],
-  view: "passing",
-  query: "",
-  sortKey: "1m",
-  sortDir: "desc",
+  ...parseState(location.search),
 };
 
 const els = {
@@ -194,23 +173,32 @@ function renderCounts() {
   }
 }
 
+// Keeps the view, sort and search in the URL without adding history entries.
+function updateUrl() {
+  const url = `${location.pathname}${serializeState(state)}${location.hash}`;
+  history.replaceState(history.state, "", url);
+}
+
 function render() {
   renderCounts();
   renderHeader();
   renderBody();
+  updateUrl();
 }
 
 async function init() {
+  els.search.value = state.query;
   els.search.addEventListener("input", () => {
     state.query = els.search.value;
     renderBody();
+    updateUrl();
   });
   for (const button of els.viewButtons) {
     button.addEventListener("click", () => {
       state.view = button.dataset.view;
-      if (state.view === "passing" && state.sortKey === "reason") {
-        state.sortKey = "1m";
-        state.sortDir = "desc";
+      if (!canSortBy(state.view, state.sortKey)) {
+        state.sortKey = DEFAULT_STATE.sortKey;
+        state.sortDir = DEFAULT_STATE.sortDir;
       }
       render();
     });
