@@ -33,7 +33,22 @@
           <button type="button" data-view="excluded" aria-pressed="false">Excluded <span data-count="excluded"></span></button>
           <button type="button" data-view="all" aria-pressed="false">All <span data-count="all"></span></button>
         </div>
-        <input id="search" type="search" placeholder="Search code, name or type" aria-label="Search funds" autocomplete="off">
+        <div class="filters">
+          <select id="type-filter" aria-label="Fund type">
+            <option value="">All types</option>
+          </select>
+          <select id="risk-filter" aria-label="Risk level">
+            <option value="">All risk levels</option>
+            <option value="1">Risk 1</option>
+            <option value="2">Risk 2</option>
+            <option value="3">Risk 3</option>
+            <option value="4">Risk 4</option>
+            <option value="5">Risk 5</option>
+            <option value="6">Risk 6</option>
+            <option value="7">Risk 7</option>
+          </select>
+          <input id="search" type="search" placeholder="Search code, name or type" aria-label="Search funds" autocomplete="off">
+        </div>
       </div>
 
       <div class="table-wrap">

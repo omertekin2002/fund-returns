@@ -269,9 +269,19 @@ h1 {
   color: var(--on-primary);
 }
 
+/* The type and risk selects and the search, on the right of the view toggle. */
+.filters {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* The text-input primitive from DESIGN.md. */
+.filters select,
 #search {
-  flex: 1 1 240px;
-  max-width: 360px;
   min-height: 32px;
   padding: var(--space-xs) var(--space-s);
   border: var(--hairline);
@@ -279,6 +289,16 @@ h1 {
   background: var(--canvas);
   color: var(--ink);
   font: 14px/1.4 var(--font-body);
+}
+
+.filters select {
+  max-width: 100%;
+  cursor: pointer;
+}
+
+#search {
+  flex: 1 1 240px;
+  max-width: 360px;
 }
 
 .table-wrap {
@@ -426,8 +446,16 @@ th button[data-dir="desc"]::after {
     padding: var(--space-s) var(--space-sm);
   }
 
+  .filters select,
+  #search {
+    min-height: 44px;
+  }
+
+  .filters select {
+    flex: 1 1 auto;
+  }
+
   #search {
     max-width: none;
-    min-height: 44px;
   }
 }
