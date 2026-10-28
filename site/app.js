@@ -2,6 +2,7 @@ import { changesSummary, classifyFunds, membershipChanges } from "./changes.js";
 import { COLUMNS } from "./columns.js";
 import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
+import { HEIGHT, polylinePoints, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
 // View, sort, search and filters start from the page URL, so links can be shared.
@@ -29,6 +30,8 @@ const els = {
   riskFilter: document.getElementById("risk-filter"),
   viewButtons: document.querySelectorAll("[data-view]"),
 };
+
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 const countFormat = new Intl.NumberFormat("en-US");
 const numberFormat = new Intl.NumberFormat("en-US", {
@@ -93,6 +96,14 @@ function renderHeader() {
       const th = document.createElement("th");
       th.scope = "col";
       th.className = `col-${col.type} col-${col.key}`;
+      if (col.sortable === false) {
+        // A plain label: no sort button and no aria-sort.
+        const label = document.createElement("span");
+        label.textContent = col.label;
+        if (col.title) label.title = col.title;
+        th.append(label);
+        return th;
+      }
       const sorted = state.sortKey === col.key;
       th.setAttribute("aria-sort", sorted ? (state.sortDir === "asc" ? "ascending" : "descending") : "none");
       const button = document.createElement("button");
@@ -151,6 +162,24 @@ function badge(text, title) {
   return span;
 }
 
+// The fund's 4-week price line as an inline SVG, from the points worked out
+// when the data loaded.
+function sparklineSvg(trend) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "sparkline");
+  svg.setAttribute("viewBox", `0 0 ${WIDTH} ${HEIGHT}`);
+  svg.setAttribute("width", String(WIDTH));
+  svg.setAttribute("height", String(HEIGHT));
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", trend.label);
+  for (const points of trend.points) {
+    const line = document.createElementNS(SVG_NS, "polyline");
+    line.setAttribute("points", points);
+    svg.append(line);
+  }
+  return svg;
+}
+
 function renderBody() {
   const columns = visibleColumns();
   const rows = selectedFunds().map((fund) => {
@@ -178,6 +207,9 @@ function renderBody() {
         td.textContent = formatReturn(value);
       } else if (col.type === "ratio") {
         td.textContent = formatRatio(value);
+      } else if (col.type === "sparkline") {
+        if (value) td.append(sparklineSvg(value));
+        else td.textContent = "—";
       } else if (col.key === "reason" && fund.reason) {
         // Tinted with the colour of the rule's card above the table.
         td.classList.add(`rule-${fund.reason.rule}`);
@@ -220,6 +252,14 @@ function render() {
   updateUrl();
 }
 
+// The fund's price line ready to draw ({ points, label }), or null with fewer
+// than two prices.
+function trendOf(prices, days) {
+  const line = sparkline(prices, days);
+  if (!line) return null;
+  return { points: line.segments.map(polylinePoints), label: sparklineLabel(line.change) };
+}
+
 async function init() {
   els.search.value = state.query;
   els.search.addEventListener("input", () => {
@@ -252,9 +292,12 @@ async function init() {
     const response = await fetch("data/funds.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
+    const days = Array.isArray(data.priceDates) ? data.priceDates.length : 0;
     state.funds = classifyFunds(data.funds).map((fund) => ({
       ...fund,
       searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
+      // Worked out once here, not on every render, so the All view stays fast.
+      trend: trendOf(fund.prices, days),
     }));
     // The type options are the umbrellas in the data; a type from the URL that
     // matches none of them is dropped.

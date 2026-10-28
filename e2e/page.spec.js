@@ -9,6 +9,7 @@ import {
   filtered,
   formatCount,
   funds,
+  hasTrend,
   normalize,
   passing,
   previousData,
@@ -409,6 +410,106 @@ test.describe("type and risk filters", () => {
       expect(box.x, selector).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width, selector).toBeLessThanOrEqual(320);
     }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
+test.describe("4-week price line", () => {
+  const trendCells = (page) => page.locator("#funds tbody td.col-trend");
+  const lines = (page) => page.locator("#funds tbody td.col-trend svg");
+  const withLine = (list) => list.filter((f) => hasTrend.get(f.code));
+  const collectErrors = (page) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    return errors;
+  };
+
+  test("shows a line for every fund with two prices, and — for the rest, in every view", async ({ page }) => {
+    const errors = collectErrors(page);
+    // The committed data has funds of both kinds.
+    expect(withLine(funds).length).toBeGreaterThan(0);
+    expect(withLine(funds).length).toBeLessThan(funds.length);
+
+    await open(page);
+    await expect(header(page, "trend")).toHaveText("4 weeks");
+    await expect(trendCells(page)).toHaveCount(passing.length);
+    await expect(lines(page)).toHaveCount(withLine(passing).length);
+
+    await page.locator('[data-view="excluded"]').click();
+    await expect(trendCells(page)).toHaveCount(excluded.length);
+    await expect(lines(page)).toHaveCount(withLine(excluded).length);
+
+    await page.locator('[data-view="all"]').click();
+    await expect(rows(page)).toHaveCount(funds.length);
+    await expect(lines(page)).toHaveCount(withLine(funds).length);
+    await expect(trendCells(page).filter({ hasText: "—" })).toHaveCount(funds.length - withLine(funds).length);
+    // Each line is one or a few polylines, and none of them has NaN in it.
+    const points = await page.locator("#funds tbody td.col-trend polyline").evaluateAll((els) =>
+      els.map((el) => el.getAttribute("points")),
+    );
+    expect(points.length).toBeGreaterThanOrEqual(withLine(funds).length);
+    expect(points.filter((p) => /NaN|Infinity/.test(p))).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  test("each line is an image labelled with the price change over the four weeks", async ({ page }) => {
+    // Worked out here from the raw prices rather than with sparkline.js.
+    const fund = passing.find((f) => hasTrend.get(f.code));
+    const prices = fund.prices.filter((p) => typeof p === "number" && p > 0);
+    const change = (prices.at(-1) / prices[0] - 1) * 100;
+    const percent = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
+      Math.abs(change),
+    );
+    const expected =
+      percent === "0.00"
+        ? "Price over 4 weeks: unchanged"
+        : `Price over 4 weeks: ${change > 0 ? "up" : "down"} ${percent}%`;
+
+    await open(page);
+    await page.locator("#search").fill(fund.code);
+    const row = page.locator("#funds tbody tr", { has: page.locator("td.col-code a", { hasText: fund.code }) });
+    const line = row.locator("td.col-trend").getByRole("img");
+    await expect(line).toHaveCount(1);
+    await expect(line).toHaveAccessibleName(expected);
+    await expect(line).toHaveAttribute("viewBox", "0 0 80 20");
+    const box = await line.boundingBox();
+    expect(Math.round(box.width)).toBe(80);
+    expect(Math.round(box.height)).toBe(20);
+    // Every line in the table is labelled the same way.
+    const labels = await lines(page).evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    expect(labels.every((label) => /^Price over 4 weeks: (up \S+%|down \S+%|unchanged)$/.test(label))).toBe(true);
+  });
+
+  test("its header is not a sort button, and clicking it changes nothing", async ({ page }) => {
+    await open(page, "?view=all");
+    await expect(header(page, "trend").getByRole("button")).toHaveCount(0);
+    await expect(header(page, "trend")).not.toHaveAttribute("aria-sort");
+    const codes = page.locator("#funds tbody td.col-code a");
+    const before = await codes.allTextContents();
+
+    await header(page, "trend").click();
+    await expect(header(page, "1m")).toHaveAttribute("aria-sort", "descending");
+    await expect(header(page, "trend")).not.toHaveAttribute("aria-sort");
+    expect(await codes.allTextContents()).toEqual(before);
+    expect(new URL(page.url()).search).toBe("?view=all");
+  });
+
+  test("?sort=trend falls back to the default sort without errors", async ({ page }) => {
+    const errors = collectErrors(page);
+    await open(page, "?sort=trend&dir=asc");
+    await expect(header(page, "1m")).toHaveAttribute("aria-sort", "descending");
+    await expect(rows(page)).toHaveCount(passing.length);
+    await expect.poll(() => new URL(page.url()).search).toBe("");
+    expect(errors).toEqual([]);
+  });
+
+  test("scrolls with the table on a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page);
+    await expect(lines(page).first()).toBeAttached();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
 });

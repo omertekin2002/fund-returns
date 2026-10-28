@@ -344,7 +344,8 @@ thead th {
   white-space: nowrap;
 }
 
-th button {
+th button,
+th > span {
   width: 100%;
   padding: var(--space-sm) var(--space-md);
   border: 0;
@@ -354,6 +355,12 @@ th button {
   text-transform: uppercase;
   text-align: inherit;
   cursor: pointer;
+}
+
+/* The label of a column that can't be sorted (the 4-week price line). */
+th > span {
+  display: block;
+  cursor: default;
 }
 
 th button[data-dir="asc"]::after {
@@ -404,6 +411,28 @@ th button[data-dir="desc"]::after {
 
 .col-umbrella {
   min-width: 140px;
+}
+
+/* The 4-week price line: a black stroke on the white row, no fill (DESIGN.md:
+   flat, ink on canvas). The table-wrap scrolls it into view on phones. */
+td.col-sparkline {
+  padding-top: var(--space-xs);
+  padding-bottom: var(--space-xs);
+  white-space: nowrap;
+}
+
+.sparkline {
+  display: block;
+  width: 80px;
+  height: 20px;
+}
+
+.sparkline polyline {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .col-reason {

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { classifyFunds, membershipChanges } from "../site/changes.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
+import { sparkline } from "../site/sparkline.js";
 
 export const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
 
@@ -14,6 +15,9 @@ export const funds = classifyFunds(data.funds);
 // first daily update has kept one.
 const previousUrl = new URL("../site/data/previous.json", import.meta.url);
 export const committedPrevious = existsSync(previousUrl) ? JSON.parse(readFileSync(previousUrl, "utf8")) : null;
+
+// Whether each fund has a 4-week price line (at least two valid prices), by code.
+export const hasTrend = new Map(funds.map((f) => [f.code, sparkline(f.prices, data.priceDates.length) !== null]));
 
 export const passing = funds.filter((f) => !f.reason);
 export const excluded = funds.filter((f) => f.reason);
