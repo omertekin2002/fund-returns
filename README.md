@@ -36,6 +36,30 @@ A fund is shown only if it breaks none of these rules:
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
 
+## Changes since the last update
+
+Under the banner, the page says how many funds entered or left the passing
+list since the previous update, e.g. "Since 27 Oct 2026: 3 funds entered, 2
+left the passing list.", and marks those funds' rows with `NEW` (in the
+Passing and All views) or `LEFT` (in the Excluded and All views). Funds that
+left and are no longer in the data have no row, so the summary lists their
+codes.
+
+- Before each update, [`scripts/fetch_funds.py`](scripts/fetch_funds.py)
+  keeps the existing `site/data/funds.json` as
+  [`site/data/previous.json`](site/data/previous.json), but only if it is
+  from an earlier Istanbul day. A second run on the same day keeps the
+  existing `previous.json`, so the page always compares against the last
+  earlier day. A failed fetch changes neither file.
+- After the table is on screen, the page loads `previous.json` and checks
+  both files' funds with the same rules (and each file's own Sharpe ratios
+  and risk-free return), in [`site/changes.js`](site/changes.js). A fund
+  entered if it passes now and didn't pass before (or wasn't in the previous
+  data); it left if it passed before and doesn't pass now (or is no longer in
+  the data).
+- Without `previous.json`, or with a broken one, the page shows nothing about
+  changes.
+
 ## Sharpe ratio
 
 The **Sharpe** column is each fund's Sharpe ratio over the last four weeks of
@@ -55,6 +79,16 @@ Over four weeks the ratio is noisy, and funds with very steady prices (money
 market and short-term funds) can reach large values, positive or negative,
 from small differences against the risk-free return.
 
+## 4-week price line
+
+The **4 weeks** column draws each fund's daily prices over the same four weeks
+as a small line, drawn by [`site/sparkline.js`](site/sparkline.js), so you can
+see whether a fund rose steadily, jumped once or fell back. A gap in the line
+is a day without a price. Each line is scaled to its own fund's lowest and
+highest price, so heights can't be compared between rows. Screen readers read
+the change from the first to the last price, e.g. "Price over 4 weeks: up
+2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
+
 ## How it works
 
 - [`scripts/fetch_funds.py`](scripts/fetch_funds.py) calls the JSON API behind
@@ -63,11 +97,15 @@ from small differences against the risk-free return.
   API behind [TEFAS › Fon Verileri](https://www.tefas.gov.tr/tr/fon-verileri)
   for each fund's daily prices over the last four weeks (TEFAS allows at most
   one month per request). It writes both to
-  [`site/data/funds.json`](site/data/funds.json). It uses only the Python
-  standard library and refuses to overwrite the file if a response looks
-  wrong.
+  [`site/data/funds.json`](site/data/funds.json), after keeping an earlier
+  day's file as `site/data/previous.json` (see
+  [Changes since the last update](#changes-since-the-last-update)). It uses
+  only the Python standard library and refuses to overwrite the file if a
+  response looks wrong.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
-  script, commits the new data file (giving a history of every update), and
+  script, commits the new data file and `previous.json` together (giving a
+  history of every update; `previous.json` is the same content as an earlier
+  `funds.json`, so git stores it only once), and
   deploys `site/` to GitHub Pages. cron-job.org starts it at 10:15 Istanbul
   time on weekdays (see [Daily trigger](#daily-trigger-cron-joborg)). Its own
   GitHub schedule (12:37 Istanbul time, Monday to Friday) is a fallback: it
@@ -151,11 +189,12 @@ npm test        # unit tests (Node 20+ and Python 3.9+)
 npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
-`npm test` runs the filter rule, Sharpe ratio, data freshness and URL state tests
-(`node --test`), then the Python tests in [`tests/`](tests/)
+`npm test` runs the filter rule, Sharpe ratio, price line, data freshness,
+URL state and changes tests (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
-retries and atomic write with fixtures and mocks, and the trigger check tests
+retries, atomic write and keeping of `previous.json` with fixtures and mocks,
+and the trigger check tests
 cover its decision with fixture `gh run list` output, so they need no network
 and no packages.
 
@@ -168,9 +207,14 @@ without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
 `sharpe.js`; that the table lists the right rows (with a Reason column only
 for excluded funds); that search and column sorting work, and are kept in
-and restored from the URL; that the type and risk filters list the types in
+and restored from the URL; that every fund with two prices has a labelled
+4-week price line (and the rest show `—`), and that its column can't be
+sorted; that the type and risk filters list the types in
 the data, narrow the rows and view counts (but not the sticker or rule
 cards), work from the keyboard and at 320 px wide, and are kept in and
 restored from the URL, with unknown values ignored; that the stale data
-warning appears only when the data is old; and that a failed data request
-shows an error.
+warning appears only when the data is old; that a failed data request
+shows an error; and that the changes summary and the `NEW` / `LEFT` badges
+match what `changes.js` works out from a `previous.json` fixture with known
+changes (and from the committed one), fit a 320 px screen, and are left out
+without errors when `previous.json` is missing or broken.

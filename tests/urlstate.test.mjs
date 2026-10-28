@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COLUMNS } from "../site/columns.js";
-import { DEFAULT_STATE, RISK_LEVELS, parseState, serializeState } from "../site/urlstate.js";
+import { DEFAULT_STATE, RISK_LEVELS, canSortBy, parseState, serializeState } from "../site/urlstate.js";
 
 const DEFAULTS = { view: "passing", query: "", sortKey: "1m", sortDir: "desc", type: "", risk: "" };
 
@@ -44,9 +44,10 @@ test("leaves out values at their default", () => {
   );
 });
 
-test("round-trips every view and every column's sort key", () => {
+test("round-trips every view and every sortable column's sort key", () => {
   for (const view of ["passing", "excluded", "all"]) {
-    for (const { key } of COLUMNS) {
+    for (const { key, sortable } of COLUMNS) {
+      if (sortable === false) continue;
       if (view === "passing" && key === "reason") continue;
       for (const sortDir of ["asc", "desc"]) {
         const state = { ...DEFAULTS, view, sortKey: key, sortDir };
@@ -95,6 +96,22 @@ test("sorting by reason is only allowed for the excluded and all views", () => {
     sortDir: "asc",
   });
   assert.equal(parseState("?view=all&sort=reason").sortKey, "reason");
+});
+
+test("the 4-week price line can't be sorted by in any view", () => {
+  const trend = COLUMNS.find((c) => c.key === "trend");
+  assert.equal(trend.sortable, false);
+  assert.deepEqual(
+    COLUMNS.filter((c) => c.sortable === false).map((c) => c.key),
+    ["trend"],
+  );
+  for (const view of ["passing", "excluded", "all"]) {
+    assert.equal(canSortBy(view, "trend"), false, view);
+    // Falls back to the default sort, direction included.
+    assert.deepEqual(parseState(`?view=${view}&sort=trend&dir=asc`), { ...DEFAULTS, view }, view);
+  }
+  assert.deepEqual(parseState("?sort=trend"), DEFAULTS);
+  assert.deepEqual(parseState("?sort=trend&q=ak&risk=3"), { ...DEFAULTS, query: "ak", risk: "3" });
 });
 
 test("the first of repeated parameters wins", () => {
