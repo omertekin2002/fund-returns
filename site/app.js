@@ -1,12 +1,16 @@
+import { changesSummary, classifyFunds, membershipChanges } from "./changes.js";
 import { COLUMNS } from "./columns.js";
-import { RULES, exclusionReason } from "./filter.js";
+import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
-import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
 // View, sort, search and filters start from the page URL, so links can be shared.
 const state = {
   funds: [],
+  // Codes of the funds that entered or left the passing list since the
+  // previous update; empty until data/previous.json has loaded.
+  entered: new Set(),
+  left: new Set(),
   ...parseState(location.search),
 };
 
@@ -15,6 +19,7 @@ const els = {
   sticker: document.getElementById("pass-sticker"),
   updated: document.getElementById("updated"),
   stale: document.getElementById("stale"),
+  changes: document.getElementById("changes"),
   rules: document.getElementById("rules"),
   headerRow: document.getElementById("header-row"),
   body: document.querySelector("#funds tbody"),
@@ -138,6 +143,14 @@ function selectedFunds() {
     .sort((a, b) => compare(a, b, col) || a.code.localeCompare(b.code));
 }
 
+function badge(text, title) {
+  const span = document.createElement("span");
+  span.className = `badge badge-${text.toLowerCase()}`;
+  span.textContent = text;
+  span.title = title;
+  return span;
+}
+
 function renderBody() {
   const columns = visibleColumns();
   const rows = selectedFunds().map((fund) => {
@@ -153,6 +166,14 @@ function renderBody() {
         link.rel = "noopener";
         link.textContent = fund.code;
         td.append(link);
+        // Funds that entered are passing and funds that left are excluded, so
+        // each badge only shows in the views that list that fund.
+        if (state.entered.has(fund.code)) {
+          td.append(" ", badge("NEW", "Entered the passing list since the previous update"));
+        }
+        if (state.left.has(fund.code)) {
+          td.append(" ", badge("LEFT", "Left the passing list since the previous update"));
+        }
       } else if (col.type === "return") {
         td.textContent = formatReturn(value);
       } else if (col.type === "ratio") {
@@ -231,15 +252,10 @@ async function init() {
     const response = await fetch("data/funds.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    const riskFree = riskFreeReturns(data.funds);
-    state.funds = data.funds.map((raw) => {
-      const fund = { ...raw, sharpe: sharpeRatio(raw.prices, riskFree) };
-      return {
-        ...fund,
-        reason: exclusionReason(fund),
-        searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
-      };
-    });
+    state.funds = classifyFunds(data.funds).map((fund) => ({
+      ...fund,
+      searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
+    }));
     // The type options are the umbrellas in the data; a type from the URL that
     // matches none of them is dropped.
     const umbrellas = [...new Set(state.funds.map((f) => f.umbrella).filter(Boolean))].sort((a, b) =>
@@ -280,6 +296,31 @@ async function init() {
 
   renderRules();
   render();
+  loadChanges();
+}
+
+// Loads the previous update's data after the table is on screen, and marks
+// the funds that entered or left the passing list since then. Without
+// data/previous.json (before the first daily update keeps one) or with a
+// broken one, the page shows nothing about changes.
+async function loadChanges() {
+  let changes;
+  let previousFetchedAt;
+  try {
+    const response = await fetch("data/previous.json", { cache: "no-cache" });
+    if (!response.ok) return;
+    const previous = await response.json();
+    if (!Array.isArray(previous?.funds)) return;
+    changes = membershipChanges(state.funds, classifyFunds(previous.funds));
+    previousFetchedAt = previous.fetchedAt;
+  } catch {
+    return;
+  }
+  state.entered = new Set(changes.entered);
+  state.left = new Set(changes.left);
+  els.changes.textContent = changesSummary(changes, previousFetchedAt);
+  els.changes.hidden = false;
+  renderBody();
 }
 
 init();

@@ -141,6 +141,20 @@ h1 {
   display: none;
 }
 
+/* Which funds entered or left the passing list since the previous update: a
+   sky-blue strip under the banner (and under the stale warning, if shown). */
+.changes-summary {
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: var(--hairline);
+  background: var(--tint-sky);
+  color: var(--ink);
+  font: 700 14px/1.3 var(--font-ui);
+}
+
+.changes-summary[hidden] {
+  display: none;
+}
+
 /* ─── About (below the table): red panel rail + criteria ─── */
 
 .about {
@@ -367,6 +381,25 @@ th button[data-dir="desc"]::after {
 
 .col-name {
   min-width: 240px;
+}
+
+/* NEW / LEFT next to the code of a fund that entered or left the passing
+   list: a small flat block in a catalog tint, black text (AA contrast). */
+.badge {
+  display: inline-block;
+  padding: 1px var(--space-xs);
+  border: var(--hairline);
+  color: var(--ink);
+  font: 700 10px/1.2 var(--font-ui);
+  vertical-align: 1px;
+}
+
+.badge-new {
+  background: var(--tint-lime);
+}
+
+.badge-left {
+  background: var(--tint-salmon);
 }
 
 .col-umbrella {

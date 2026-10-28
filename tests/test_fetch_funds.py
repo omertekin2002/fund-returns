@@ -500,5 +500,166 @@ class FetchJsonTest(unittest.TestCase):
         self.assertIn(f"Attempt {attempts}/{attempts} failed", self.stderr.getvalue())
 
 
+def data_file(fetched_at, codes=("AAA",)):
+    """The text of a funds.json fetched at fetched_at."""
+    funds = [{"code": code, "returns": {}, "prices": []} for code in codes]
+    return fetch_funds.render(funds, fetched_at, DATES)
+
+
+class RotatePreviousTest(unittest.TestCase):
+    NOW = "2026-10-28T07:15:00Z"  # 10:15 on 28 Oct in Istanbul
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.output = self.directory / "funds.json"
+        self.previous = self.directory / "previous.json"
+        stdout = mock.patch("sys.stdout", new_callable=io.StringIO)
+        stderr = mock.patch("sys.stderr", new_callable=io.StringIO)
+        stdout.start()
+        self.stderr = stderr.start()
+        self.addCleanup(stdout.stop)
+        self.addCleanup(stderr.stop)
+
+    def rotate(self):
+        return fetch_funds.rotate_previous(str(self.output), str(self.previous), self.NOW)
+
+    def files(self):
+        return sorted(os.listdir(self.directory))
+
+    def test_keeps_data_from_an_earlier_day(self):
+        old = data_file("2026-10-27T07:15:00Z")
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(data_file("2026-10-24T07:15:00Z"), encoding="utf-8")
+        self.assertTrue(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), old)
+        self.assertEqual(self.files(), ["funds.json", "previous.json"])
+
+    def test_compares_istanbul_dates(self):
+        # 23:30 UTC on 27 Oct is already 02:30 on 28 Oct in Istanbul.
+        self.output.write_text(data_file("2026-10-27T23:30:00Z"), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertFalse(self.previous.exists())
+        # 20:59 UTC on 27 Oct is still 23:59 on 27 Oct in Istanbul.
+        self.output.write_text(data_file("2026-10-27T20:59:00Z"), encoding="utf-8")
+        self.assertTrue(self.rotate())
+        self.assertTrue(self.previous.exists())
+
+    def test_leaves_previous_alone_when_the_data_is_from_the_same_day(self):
+        kept = data_file("2026-10-27T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-28T07:16:00Z"), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+
+    def test_missing_output_writes_no_previous(self):
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.files(), [])
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_invalid_output_writes_no_previous(self):
+        kept = data_file("2026-10-24T07:15:00Z")
+        for text in [
+            "not json",
+            "[]",
+            '{"fetchedAt": "2026-10-27T07:15:00Z"}',
+            '{"funds": []}',
+            '{"fetchedAt": "yesterday", "funds": []}',
+            '{"fetchedAt": 5, "funds": []}',
+        ]:
+            with self.subTest(text=text):
+                self.output.write_text(text, encoding="utf-8")
+                self.previous.write_text(kept, encoding="utf-8")
+                self.assertFalse(self.rotate())
+                self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+                self.assertIn("Not keeping the previous data", self.stderr.getvalue())
+
+    def test_a_failed_write_is_only_logged(self):
+        self.output.write_text(data_file("2026-10-27T07:15:00Z"), encoding="utf-8")
+        with mock.patch.object(fetch_funds.os, "replace", side_effect=OSError("disk full")):
+            self.assertFalse(self.rotate())
+        self.assertFalse(self.previous.exists())
+        self.assertIn("disk full", self.stderr.getvalue())
+        self.assertEqual(self.files(), ["funds.json"])
+
+
+class FixedDatetime(fetch_funds.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 10, 28, 7, 15, 0, 123, tzinfo=tz)
+
+
+@small_limits
+class MainTest(unittest.TestCase):
+    """The whole script with TEFAS mocked: which files it writes."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.output = self.directory / "funds.json"
+        self.previous = self.directory / "previous.json"
+        for patcher in [
+            mock.patch.object(fetch_funds, "datetime", FixedDatetime),
+            mock.patch("sys.argv", ["fetch_funds.py", str(self.output)]),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ]:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_main(self, responses=None):
+        responses = responses or [funds_response(), prices_response()]
+        with mock.patch.object(fetch_funds, "fetch_json", side_effect=responses):
+            fetch_funds.main()
+
+    def test_moves_yesterdays_data_to_previous(self):
+        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        self.output.write_text(old, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+        new = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(codes_of(new["funds"]), CODES)
+
+    def test_a_second_run_on_the_same_day_keeps_previous(self):
+        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        self.output.write_text(old, encoding="utf-8")
+        self.run_main()
+        self.run_main()
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+        self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
+
+    def test_first_run_writes_no_previous(self):
+        self.run_main()
+        self.assertTrue(self.output.exists())
+        self.assertFalse(self.previous.exists())
+
+    def test_invalid_old_file_writes_no_previous_but_the_new_data(self):
+        self.output.write_text("<html>oops</html>", encoding="utf-8")
+        self.run_main()
+        self.assertFalse(self.previous.exists())
+        self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
+
+    def test_a_failed_or_invalid_fetch_changes_neither_file(self):
+        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        for responses in [
+            [RuntimeError("Could not fetch data from TEFAS")],
+            [funds_response(CODES[:1]), prices_response()],  # too few funds
+            [funds_response(), prices_response(dates=DATES[:1])],  # too few dates
+        ]:
+            with self.subTest(responses=responses):
+                self.output.write_text(old, encoding="utf-8")
+                self.previous.write_text(kept, encoding="utf-8")
+                with self.assertRaises((RuntimeError, ValueError)):
+                    self.run_main(responses)
+                self.assertEqual(self.output.read_text(encoding="utf-8"), old)
+                self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+                self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
+
+
 if __name__ == "__main__":
     unittest.main()
