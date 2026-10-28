@@ -1,18 +1,19 @@
 // The numbers the page should show, worked out from the committed data with
 // the same modules site/app.js uses, so the specs keep passing when the daily
 // update changes the counts.
-import { readFileSync } from "node:fs";
-import { RULES, exclusionReason } from "../site/filter.js";
-import { riskFreeReturns, sharpeRatio } from "../site/sharpe.js";
+import { existsSync, readFileSync } from "node:fs";
+import { classifyFunds, membershipChanges } from "../site/changes.js";
+import { RULES } from "../site/filter.js";
+import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 
 export const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
 
-const riskFree = riskFreeReturns(data.funds);
+export const funds = classifyFunds(data.funds);
 
-export const funds = data.funds.map((raw) => {
-  const fund = { ...raw, sharpe: sharpeRatio(raw.prices, riskFree) };
-  return { ...fund, reason: exclusionReason(fund) };
-});
+// The committed previous update (data/previous.json), or null before the
+// first daily update has kept one.
+const previousUrl = new URL("../site/data/previous.json", import.meta.url);
+export const committedPrevious = existsSync(previousUrl) ? JSON.parse(readFileSync(previousUrl, "utf8")) : null;
 
 export const passing = funds.filter((f) => !f.reason);
 export const excluded = funds.filter((f) => f.reason);
@@ -36,4 +37,32 @@ export const umbrellas = [...new Set(funds.map((f) => f.umbrella).filter(Boolean
 export function filtered({ type = "", risk = "" } = {}) {
   const all = funds.filter((f) => (!type || f.umbrella === type) && (!risk || f.risk === Number(risk)));
   return { all, passing: all.filter((f) => !f.reason), excluded: all.filter((f) => f.reason) };
+}
+
+// A previous.json for the change specs: the committed data a day earlier,
+// with known changes. Two passing funds failed the 1M rule then (so they
+// entered), two excluded funds had a passing fund's returns and prices then
+// (so they left), and a passing fund no longer in the data (so it left and is
+// gone). Money market funds are left alone so the risk-free return is the
+// same. The expected changes are worked out with changes.js, as the page does.
+export function previousData() {
+  const enteredCodes = passing.slice(0, 2).map((f) => f.code);
+  const leftCodes = excluded
+    .filter((f) => f.umbrella !== RISK_FREE_UMBRELLA)
+    .slice(0, 2)
+    .map((f) => f.code);
+  const donor = data.funds.find((f) => f.code === passing.find((p) => p.umbrella !== RISK_FREE_UMBRELLA).code);
+  const goneFund = { ...donor, code: "ZZGONE", name: "GONE FUND" };
+  const previousFunds = data.funds.map((raw) => {
+    if (enteredCodes.includes(raw.code)) return { ...raw, returns: { ...raw.returns, "1m": 0 } };
+    if (leftCodes.includes(raw.code)) return { ...raw, returns: donor.returns, prices: donor.prices };
+    return raw;
+  });
+  const previous = {
+    ...data,
+    fetchedAt: new Date(new Date(data.fetchedAt).getTime() - 24 * 60 * 60 * 1000).toISOString(),
+    funds: [...previousFunds, goneFund],
+  };
+  const changes = membershipChanges(funds, classifyFunds(previous.funds));
+  return { previous, changes, enteredCodes, leftCodes, goneCode: goneFund.code };
 }
