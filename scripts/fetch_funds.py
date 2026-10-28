@@ -11,6 +11,12 @@ Usage: python3 scripts/fetch_funds.py [output_path]
 
 Uses only the Python standard library so the workflow needs no install step.
 The output file is only replaced after the response passes validation.
+
+Before replacing it, the script keeps the existing file's content as
+previous.json next to it, so the website can show which funds entered or left
+the passing list since the last update. It does this only when the existing
+file is from an earlier Istanbul day, so a second run on the same day still
+compares against the last earlier day.
 """
 
 import http.client
@@ -266,8 +272,49 @@ def write_atomically(path, text):
         raise
 
 
+def istanbul_date(iso):
+    """The Istanbul calendar date of an ISO timestamp such as "2026-10-20T07:15:33Z"."""
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ISTANBUL).date()
+
+
+def rotate_previous(output, previous, fetched_at):
+    """Copy the existing output file to previous if it is from an earlier day.
+
+    Returns True if previous was written. A missing, unreadable or invalid
+    output file, or one from the same Istanbul day as fetched_at, leaves
+    previous as it is. Never raises: the new data must still be written.
+    """
+    try:
+        with open(output, encoding="utf-8") as handle:
+            text = handle.read()
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        print(f"Not keeping the previous data: {exc}", file=sys.stderr)
+        return False
+    try:
+        data = json.loads(text)
+        if not isinstance(data, dict) or not isinstance(data.get("funds"), list):
+            raise ValueError("it has no funds list")
+        old_fetched_at = data.get("fetchedAt")
+        if not isinstance(old_fetched_at, str):
+            raise ValueError("it has no fetchedAt")
+        if istanbul_date(old_fetched_at) >= istanbul_date(fetched_at):
+            print(f"Keeping {os.path.normpath(previous)}: the data was already fetched today")
+            return False
+        # The same text as the old file, so git stores it only once.
+        write_atomically(previous, text)
+    # Any error here is only logged: it must not stop the new data being written.
+    except Exception as exc:
+        print(f"Not keeping the previous data: {exc}", file=sys.stderr)
+        return False
+    print(f"Kept the data fetched at {old_fetched_at} in {os.path.normpath(previous)}")
+    return True
+
+
 def main():
     output = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OUTPUT
+    previous = os.path.join(os.path.dirname(output), "previous.json")
     now = datetime.now(timezone.utc).replace(microsecond=0)
     funds = parse(fetch_json(API_URL, PAYLOAD, PAGE_URL))
 
@@ -278,8 +325,10 @@ def main():
     for fund in funds:
         fund["prices"] = prices[fund["code"]]
 
-    text = render(funds, now.isoformat().replace("+00:00", "Z"), price_dates)
+    fetched_at = now.isoformat().replace("+00:00", "Z")
+    text = render(funds, fetched_at, price_dates)
     json.loads(text)  # sanity check that the hand-assembled JSON is valid
+    rotate_previous(output, previous, fetched_at)
     write_atomically(output, text)
     print(
         f"Wrote {len(funds)} funds with prices for {len(price_dates)} dates "
