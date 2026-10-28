@@ -20,13 +20,18 @@ export const RISK_LEVELS = ["1", "2", "3", "4", "5", "6", "7"];
 const SORT_KEYS = COLUMNS.map((c) => c.key);
 const SORT_DIRS = ["asc", "desc"];
 
+const UNSORTABLE_KEYS = COLUMNS.filter((c) => c.sortable === false).map((c) => c.key);
+
+// Columns with `sortable: false` (the 4-week price line) can't be sorted by.
 // The Reason column is only shown for excluded funds, so the Passing view
 // can't be sorted by it.
-export const canSortBy = (view, sortKey) => sortKey !== "reason" || view !== "passing";
+export const canSortBy = (view, sortKey) =>
+  !UNSORTABLE_KEYS.includes(sortKey) && (sortKey !== "reason" || view !== "passing");
 
 // Reads { view, query, sortKey, sortDir, type, risk } from a location.search
 // string. Each missing or invalid parameter falls back to its default on its
-// own; a sort by reason in the Passing view falls back to the default sort.
+// own; a sort by a column that can't be sorted by (the 4-week price line, or
+// reason in the Passing view) falls back to the default sort.
 // The type is any string here: app.js drops it if no fund has that umbrella.
 export function parseState(search) {
   const params = new URLSearchParams(search);

@@ -79,6 +79,16 @@ Over four weeks the ratio is noisy, and funds with very steady prices (money
 market and short-term funds) can reach large values, positive or negative,
 from small differences against the risk-free return.
 
+## 4-week price line
+
+The **4 weeks** column draws each fund's daily prices over the same four weeks
+as a small line, drawn by [`site/sparkline.js`](site/sparkline.js), so you can
+see whether a fund rose steadily, jumped once or fell back. A gap in the line
+is a day without a price. Each line is scaled to its own fund's lowest and
+highest price, so heights can't be compared between rows. Screen readers read
+the change from the first to the last price, e.g. "Price over 4 weeks: up
+2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
+
 ## How it works
 
 - [`scripts/fetch_funds.py`](scripts/fetch_funds.py) calls the JSON API behind
@@ -179,8 +189,8 @@ npm test        # unit tests (Node 20+ and Python 3.9+)
 npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
-`npm test` runs the filter rule, Sharpe ratio, data freshness, URL state and
-changes tests (`node --test`), then the Python tests in [`tests/`](tests/)
+`npm test` runs the filter rule, Sharpe ratio, price line, data freshness,
+URL state and changes tests (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
@@ -197,7 +207,9 @@ without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
 `sharpe.js`; that the table lists the right rows (with a Reason column only
 for excluded funds); that search and column sorting work, and are kept in
-and restored from the URL; that the type and risk filters list the types in
+and restored from the URL; that every fund with two prices has a labelled
+4-week price line (and the rest show `—`), and that its column can't be
+sorted; that the type and risk filters list the types in
 the data, narrow the rows and view counts (but not the sticker or rule
 cards), work from the keyboard and at 320 px wide, and are kept in and
 restored from the URL, with unknown values ignored; that the stale data
