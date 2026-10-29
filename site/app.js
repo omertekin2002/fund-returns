@@ -1,5 +1,6 @@
 import { changesSummary, classifyFunds, membershipChanges } from "./changes.js";
-import { COLUMNS } from "./columns.js";
+import { COLUMNS, columnsFor } from "./columns.js";
+import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
 import { HEIGHT, polylinePoints, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
@@ -8,6 +9,8 @@ import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate
 // View, sort, search and filters start from the page URL, so links can be shared.
 const state = {
   funds: [],
+  // The data file's fetch time (ISO), which dates the CSV file name.
+  fetchedAt: null,
   // Codes of the funds that entered or left the passing list since the
   // previous update; empty until data/previous.json has loaded.
   entered: new Set(),
@@ -26,6 +29,7 @@ const els = {
   body: document.querySelector("#funds tbody"),
   empty: document.getElementById("empty"),
   search: document.getElementById("search"),
+  download: document.getElementById("download-csv"),
   typeFilter: document.getElementById("type-filter"),
   riskFilter: document.getElementById("risk-filter"),
   viewButtons: document.querySelectorAll("[data-view]"),
@@ -64,7 +68,7 @@ function formatFetchedAt(iso) {
 const normalize = (text) => text.toLocaleLowerCase("tr-TR");
 
 function visibleColumns() {
-  return state.view === "passing" ? COLUMNS.filter((c) => c.key !== "reason") : COLUMNS;
+  return columnsFor(state.view);
 }
 
 function renderRules() {
@@ -223,6 +227,24 @@ function renderBody() {
   });
   els.body.replaceChildren(...rows);
   els.empty.hidden = rows.length > 0;
+  // Nothing to download while no fund matches.
+  els.download.disabled = rows.length === 0;
+}
+
+// Downloads the rows the table shows, in its order, as a CSV file.
+function downloadCsv() {
+  const funds = selectedFunds();
+  if (funds.length === 0) return;
+  const blob = new Blob([toCsv(funds, csvColumns(state.view))], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = csvFileName(state.view, state.fetchedAt);
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Revoked a moment later, once the browser has started the download.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // The view counts follow the type and risk filters but not the search.
@@ -278,6 +300,7 @@ async function init() {
     });
   }
   els.riskFilter.value = state.risk;
+  els.download.addEventListener("click", downloadCsv);
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],
@@ -293,6 +316,7 @@ async function init() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const days = Array.isArray(data.priceDates) ? data.priceDates.length : 0;
+    state.fetchedAt = data.fetchedAt;
     state.funds = classifyFunds(data.funds).map((fund) => ({
       ...fund,
       searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),

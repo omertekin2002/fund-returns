@@ -89,6 +89,26 @@ highest price, so heights can't be compared between rows. Screen readers read
 the change from the first to the last price, e.g. "Price over 4 weeks: up
 2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
 
+## Download
+
+**Download CSV** above the table saves the rows the table shows, in the same
+order (view, type and risk filters, search and sort), as a CSV file named
+`tefas-funds-<view>-<YYYY-MM-DD>.csv`, dated with the day the data was
+fetched (Istanbul time). It has the table's columns except the 4-week line,
+so the Passing view's file has no Reason column. The file is written by
+[`site/csv.js`](site/csv.js):
+
+- Comma separated, with `.` as the decimal point and CRLF line ends (RFC
+  4180: fields with a comma, quote or line break are quoted). It starts with a
+  UTF-8 byte order mark, so Excel shows Turkish letters correctly.
+- Returns are the raw percentages from the data (e.g. `3.0078`, without `%`),
+  Sharpe ratios are at full precision and risk is a whole number. Missing
+  values are empty cells.
+- Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a
+  leading `'`, so spreadsheet apps don't run it as a formula.
+
+The button is disabled until the data has loaded, and while no fund matches.
+
 ## How it works
 
 - [`scripts/fetch_funds.py`](scripts/fetch_funds.py) calls the JSON API behind
@@ -190,7 +210,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
 `npm test` runs the filter rule, Sharpe ratio, price line, data freshness,
-URL state and changes tests (`node --test`), then the Python tests in [`tests/`](tests/)
+URL state, changes and CSV tests (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
@@ -217,4 +237,8 @@ warning appears only when the data is old; that a failed data request
 shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
 changes (and from the committed one), fit a 320 px screen, and are left out
-without errors when `previous.json` is missing or broken.
+without errors when `previous.json` is missing or broken; and that Download
+CSV saves exactly the table's rows and columns for the view, filters, search
+and sort (with the right file name, byte order mark and raw numbers), is
+disabled while no fund matches, and works from the keyboard and at 320 px
+wide.
