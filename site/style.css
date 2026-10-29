@@ -311,8 +311,28 @@ h1 {
 }
 
 #search {
-  flex: 1 1 240px;
+  flex: 1 1 200px;
   max-width: 360px;
+}
+
+/* The button-secondary primitive from DESIGN.md (Download CSV). */
+.button-secondary {
+  min-height: 32px;
+  padding: var(--space-s) var(--space-lg);
+  border: var(--hairline);
+  border-radius: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 700 12px/1 var(--font-ui);
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Before the data loads, and while no fund matches. */
+.button-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .table-wrap {
@@ -509,7 +529,8 @@ td.col-sparkline {
   }
 
   .filters select,
-  #search {
+  #search,
+  .button-secondary {
     min-height: 44px;
   }
 
@@ -519,5 +540,9 @@ td.col-sparkline {
 
   #search {
     max-width: none;
+  }
+
+  .button-secondary {
+    flex: 1 1 auto;
   }
 }

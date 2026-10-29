@@ -32,3 +32,9 @@ export const COLUMNS = [
   },
   { key: "reason", label: "Reason", type: "text", value: (f) => f.reason?.detail ?? "" },
 ];
+
+// The columns shown in a view: the Reason column only lists why a fund was
+// excluded, so the Passing view leaves it out.
+export function columnsFor(view) {
+  return view === "passing" ? COLUMNS.filter((c) => c.key !== "reason") : COLUMNS;
+}
