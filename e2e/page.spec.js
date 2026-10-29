@@ -1,7 +1,9 @@
 // Run with: npm run test:e2e
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
+import { istanbulDate } from "../site/freshness.js";
 import {
   committedPrevious,
   data,
@@ -668,5 +670,174 @@ test.describe("changes since the previous update", () => {
       await expect(page.locator("#funds tbody .badge"), body).toHaveCount(0);
       expect(errors, body).toEqual([]);
     }
+  });
+});
+
+test.describe("CSV download", () => {
+  const button = (page) => page.locator("#download-csv");
+  const codeCells = (page) => page.locator("#funds tbody td.col-code a");
+  const byCode = new Map(funds.map((f) => [f.code, f]));
+  const day = istanbulDate(new Date(data.fetchedAt));
+  const PASSING_HEADER = ["Code", "Fund", "Type", "Risk", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe"];
+  const HORIZON_KEYS = ["1m", "3m", "6m", "1y", "ytd", "3y", "5y"];
+  const TYPE = "Hisse Senedi Şemsiye Fonu";
+
+  // Splits RFC 4180 CSV text (CRLF line ends, quoted fields) into rows of fields.
+  function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (quoted) {
+        if (char === '"' && text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else if (char === '"') {
+          quoted = false;
+        } else {
+          field += char;
+        }
+      } else if (char === '"') {
+        quoted = true;
+      } else if (char === ",") {
+        row.push(field);
+        field = "";
+      } else if (char === "\r" && text[i + 1] === "\n") {
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = "";
+        i++;
+      } else {
+        field += char;
+      }
+    }
+    return rows;
+  }
+
+  // Clicks Download CSV and returns the file's name, raw bytes and rows.
+  async function download(page, click = () => button(page).click()) {
+    const [file] = await Promise.all([page.waitForEvent("download"), click()]);
+    const bytes = await readFile(await file.path());
+    const text = bytes.toString("utf8");
+    return { name: file.suggestedFilename(), bytes, text, rows: parseCsv(text.slice(1)) };
+  }
+
+  // The CSV row a fund should have: raw numbers, empty cells for missing ones.
+  const raw = (value) => (value === null || value === undefined ? "" : String(value));
+  const expectedRow = (fund, withReason) => [
+    fund.code,
+    fund.name,
+    fund.umbrella,
+    raw(fund.risk),
+    ...HORIZON_KEYS.map((key) => raw(fund.returns[key])),
+    raw(fund.sharpe),
+    ...(withReason ? [fund.reason?.detail ?? ""] : []),
+  ];
+
+  test("lists the rows the table shows, in its order, for the view, type filter and sort in the URL", async ({
+    page,
+  }) => {
+    await open(page, `?view=all&type=${encodeURIComponent(TYPE).replace(/%20/g, "+")}&sort=sharpe&dir=asc`);
+    const expected = filtered({ type: TYPE }).all;
+    await expect(rows(page)).toHaveCount(expected.length);
+    await expect(button(page)).toBeEnabled();
+    const file = await download(page);
+
+    expect(file.name).toBe(`tefas-funds-all-${day}.csv`);
+    expect([...file.bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(file.text.endsWith("\r\n")).toBe(true);
+    const [header, ...body] = file.rows;
+    expect(header).toEqual([...PASSING_HEADER, "Reason"]);
+    expect(body).toHaveLength(expected.length);
+    expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+
+    // Lowest Sharpe first, funds without one last, as the table sorts them.
+    const sorted = [...expected].sort((a, b) => {
+      const missing = (f) => f.sharpe === null || f.sharpe === undefined;
+      if (missing(a) || missing(b)) return missing(a) === missing(b) ? 0 : missing(a) ? 1 : -1;
+      return a.sharpe - b.sharpe || a.code.localeCompare(b.code);
+    });
+    expect(body.slice(0, 5).map((r) => r[0])).toEqual(sorted.slice(0, 5).map((f) => f.code));
+    for (const row of body) expect(row).toEqual(expectedRow(byCode.get(row[0]), true));
+  });
+
+  test("follows the search and the risk filter, and the Passing view has no Reason column", async ({ page }) => {
+    // The risk level with the most passing funds, so the file has rows whatever
+    // the day's data; most fund names contain "PORTFÖY" (searched lower-case).
+    const counts = new Map();
+    for (const f of passing) if (f.risk) counts.set(f.risk, (counts.get(f.risk) ?? 0) + 1);
+    const risk = String([...counts].sort((a, b) => b[1] - a[1])[0][0]);
+    const query = "portföy";
+    await open(page, `?q=${encodeURIComponent(query)}&risk=${risk}`);
+    const expected = filtered({ risk }).passing.filter((f) =>
+      normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(query),
+    );
+    expect(expected.length).toBeGreaterThan(0);
+    await expect(rows(page)).toHaveCount(expected.length);
+    const file = await download(page);
+
+    expect(file.name).toBe(`tefas-funds-passing-${day}.csv`);
+    const [header, ...body] = file.rows;
+    expect(header).toEqual(PASSING_HEADER);
+    expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+    expect(body.map((r) => r[0]).sort()).toEqual(expected.map((f) => f.code).sort());
+    for (const row of body) expect(row).toEqual(expectedRow(byCode.get(row[0]), false));
+  });
+
+  test("the Excluded view keeps every excluded fund with its reason and Turkish names intact", async ({ page }) => {
+    await open(page, "?view=excluded");
+    const file = await download(page);
+    expect(file.name).toBe(`tefas-funds-excluded-${day}.csv`);
+    const [header, ...body] = file.rows;
+    expect(header).toEqual([...PASSING_HEADER, "Reason"]);
+    expect(body).toHaveLength(excluded.length);
+    expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+    for (const row of body) expect(row).toEqual(expectedRow(byCode.get(row[0]), true));
+    // Names with Turkish capitals (İ, Ş, Ğ, Ö, Ü, Ç) come through as they are in the data.
+    const turkish = excluded.find((f) => /[İŞĞÖÜÇ]/.test(f.name));
+    expect(body.find((r) => r[0] === turkish.code)[1]).toBe(turkish.name);
+  });
+
+  test("is disabled while no fund matches, and before the data loads", async ({ page }) => {
+    await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
+    await page.goto("./");
+    await expect(page.locator("#pass-sticker")).toHaveText("No data");
+    await expect(button(page)).toBeDisabled();
+
+    await page.unrouteAll();
+    await open(page);
+    await expect(button(page)).toBeEnabled();
+    await page.locator("#search").fill("no fund is called this");
+    await expect(page.locator("#empty")).toBeVisible();
+    await expect(button(page)).toBeDisabled();
+    await page.locator("#search").fill("");
+    await expect(button(page)).toBeEnabled();
+  });
+
+  test("can be used from the keyboard, with a visible focus ring", async ({ page }) => {
+    await open(page);
+    await page.locator("#search").focus();
+    await page.keyboard.press("Tab");
+    await expect(button(page)).toBeFocused();
+    const outline = await button(page).evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(outline).not.toBe("none");
+    const file = await download(page, () => page.keyboard.press("Enter"));
+    expect(file.name).toBe(`tefas-funds-passing-${day}.csv`);
+    expect(file.rows).toHaveLength(passing.length + 1);
+  });
+
+  test("fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page);
+    const box = await button(page).boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    const file = await download(page);
+    expect(file.rows).toHaveLength(passing.length + 1);
   });
 });
