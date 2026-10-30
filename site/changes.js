@@ -35,24 +35,40 @@ const dateFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Istanbul
 const funds = (n) => `${countFormat.format(n)} ${n === 1 ? "fund" : "funds"}`;
 
 // The one-line summary of the changes since the previous update fetched at
-// previousFetchedAt (an ISO timestamp), e.g. "Since 27 Oct 2026: 3 funds
-// entered, 2 left the passing list."
-export function changesSummary({ entered, left, gone }, previousFetchedAt) {
+// previousFetchedAt (an ISO timestamp), as a list of parts: plain text, and
+// { text, changed } for the counts of funds that entered or left (changed is
+// "entered" or "left"), which the page turns into links to those funds. Zero
+// counts are plain text. Joined, e.g. "Since 27 Oct 2026: 3 funds entered, 2
+// left the passing list."
+export function changesSummaryParts({ entered, left, gone }, previousFetchedAt) {
   const date = new Date(previousFetchedAt);
   const since =
     typeof previousFetchedAt === "string" && !Number.isNaN(date.getTime())
       ? `Since ${dateFormat.format(date)}`
       : "Since the previous update";
-  let text;
+  let parts;
   if (entered.length === 0 && left.length === 0) {
-    text = `${since}: no fund entered or left the passing list.`;
+    parts = [`${since}: no fund entered or left the passing list.`];
   } else if (left.length === 0) {
-    text = `${since}: ${funds(entered.length)} entered the passing list.`;
+    parts = [`${since}: `, { text: `${funds(entered.length)} entered`, changed: "entered" }, " the passing list."];
   } else if (entered.length === 0) {
-    text = `${since}: ${funds(left.length)} left the passing list.`;
+    parts = [`${since}: `, { text: `${funds(left.length)} left`, changed: "left" }, " the passing list."];
   } else {
-    text = `${since}: ${funds(entered.length)} entered, ${countFormat.format(left.length)} left the passing list.`;
+    parts = [
+      `${since}: `,
+      { text: `${funds(entered.length)} entered`, changed: "entered" },
+      ", ",
+      { text: `${countFormat.format(left.length)} left`, changed: "left" },
+      " the passing list.",
+    ];
   }
-  if (gone.length > 0) text += ` No longer in the data: ${gone.join(", ")}.`;
-  return text;
+  if (gone.length > 0) parts.push(` No longer in the data: ${gone.join(", ")}.`);
+  return parts;
+}
+
+// The summary above as one string.
+export function changesSummary(changes, previousFetchedAt) {
+  return changesSummaryParts(changes, previousFetchedAt)
+    .map((part) => (typeof part === "string" ? part : part.text))
+    .join("");
 }

@@ -283,7 +283,8 @@ h1 {
   color: var(--on-primary);
 }
 
-/* The type and risk selects and the search, on the right of the view toggle. */
+/* The type, risk and change selects and the search, on the right of the view
+   toggle. */
 .filters {
   display: flex;
   flex: 1 1 auto;
