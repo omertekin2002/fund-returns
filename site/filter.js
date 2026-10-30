@@ -1,6 +1,7 @@
 // Screening rules for the fund list. Returns are cumulative percentages
 // (e.g. 3.5 means +3.5%) keyed by horizon: 1m, 3m, 6m, 1y, ytd, 3y, 5y.
 // "sharpe" is the fund's 4-week Sharpe ratio from sharpe.js, or null.
+import { MIN_RETURNS } from "./sharpe.js";
 
 export const HORIZONS = [
   { key: "1m", label: "1M" },
@@ -47,41 +48,92 @@ const label = (key) => HORIZONS.find((h) => h.key === key).label;
 const fmt = (value) => `${value.toFixed(2)}%`;
 const isMissing = (value) => value === null || value === undefined;
 
-// Returns null if the fund passes every rule, otherwise the first rule it
-// breaks as { rule, detail }.
-export function exclusionReason(fund) {
+// How a fund fares on each rule, one entry per rule in RULES order, all six
+// worked out even after the first failure:
+//   rule:        the rule id;
+//   outcome:     "pass", "fail", or "missing-allowed" (the value is absent and
+//                the rule allows that);
+//   measured:    the fund's value(s), e.g. "3M 12.40%" or "No 1Y return";
+//   requirement: the rule's threshold in words;
+//   detail:      on "fail", the text the Reason column shows; otherwise null.
+export function ruleEvidence(fund) {
   const returns = fund.returns;
+  const entry = (rule, outcome, measured, requirement, detail = null) => ({
+    rule,
+    outcome,
+    measured,
+    requirement,
+    detail,
+  });
 
-  for (const { key, min, required } of MINIMUM_RETURNS) {
+  const minimums = MINIMUM_RETURNS.map(({ key, min, required }) => {
+    const rule = `min-${key}`;
+    const requirement = `${label(key)} at least ${min}%${required ? ", required" : "; missing is allowed"}`;
     const value = returns[key];
     if (isMissing(value)) {
-      if (required) return { rule: `min-${key}`, detail: `No ${label(key)} return` };
-      continue;
+      const measured = `No ${label(key)} return`;
+      return required
+        ? entry(rule, "fail", measured, requirement, measured)
+        : entry(rule, "missing-allowed", measured, requirement);
     }
-    if (value < min) {
-      return { rule: `min-${key}`, detail: `${label(key)} ${fmt(value)} < ${min}%` };
-    }
+    const measured = `${label(key)} ${fmt(value)}`;
+    return value < min
+      ? entry(rule, "fail", measured, requirement, `${measured} < ${min}%`)
+      : entry(rule, "pass", measured, requirement);
+  });
+
+  return [...minimums, orderEvidence(returns, entry), sharpeEvidence(fund.sharpe, entry)];
+}
+
+function orderEvidence(returns, entry) {
+  const requirement =
+    `No longer period below a shorter one (${ORDERED_HORIZONS.map(label).join(" ≤ ")}); ` +
+    "missing periods are skipped";
+  const available = ORDERED_HORIZONS.filter((key) => !isMissing(returns[key]));
+  // Fewer than two returns leave nothing to compare.
+  if (available.length < 2) {
+    const measured =
+      available.length === 0
+        ? "No returns to compare"
+        : `Only ${label(available[0])} ${fmt(returns[available[0]])}, nothing to compare`;
+    return entry("order", "missing-allowed", measured, requirement);
   }
+  const listed = available.map((key) => `${label(key)} ${fmt(returns[key])}`).join(" · ");
 
   // Comparing every pair (not just neighbours) catches cases where a
   // horizon in between is missing, e.g. 1M 5% vs 6M 4% with no 3M.
-  const available = ORDERED_HORIZONS.filter((key) => !isMissing(returns[key]));
   for (let i = 0; i < available.length; i++) {
     for (let j = i + 1; j < available.length; j++) {
       const shorter = available[i];
       const longer = available[j];
       if (returns[longer] < returns[shorter]) {
-        return {
-          rule: "order",
-          detail: `${label(longer)} ${fmt(returns[longer])} < ${label(shorter)} ${fmt(returns[shorter])}`,
-        };
+        const detail = `${label(longer)} ${fmt(returns[longer])} < ${label(shorter)} ${fmt(returns[shorter])}`;
+        return entry("order", "fail", `${listed}; ${detail}`, requirement, detail);
       }
     }
   }
+  return entry("order", "pass", listed, requirement);
+}
 
-  if (!isMissing(fund.sharpe) && fund.sharpe < MIN_SHARPE) {
-    return { rule: "min-sharpe", detail: `Sharpe ${fund.sharpe.toFixed(2)} < ${MIN_SHARPE.toFixed(1)}` };
+function sharpeEvidence(sharpe, entry) {
+  const requirement = `Sharpe at least ${MIN_SHARPE.toFixed(1)}; missing is allowed`;
+  if (isMissing(sharpe)) {
+    return entry(
+      "min-sharpe",
+      "missing-allowed",
+      `No Sharpe ratio (fewer than ${MIN_RETURNS} daily returns, or no variation)`,
+      requirement,
+    );
   }
+  const measured = `Sharpe ${sharpe.toFixed(2)}`;
+  return sharpe < MIN_SHARPE
+    ? entry("min-sharpe", "fail", measured, requirement, `${measured} < ${MIN_SHARPE.toFixed(1)}`)
+    : entry("min-sharpe", "pass", measured, requirement);
+}
 
-  return null;
+// Returns null if the fund passes every rule, otherwise the first rule it
+// breaks as { rule, detail }: the first failing entry of ruleEvidence.
+export function exclusionReason(fund) {
+  const failed = ruleEvidence(fund).find((e) => e.outcome === "fail");
+  return failed ? { rule: failed.rule, detail: failed.detail } : null;
 }
