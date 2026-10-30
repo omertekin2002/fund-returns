@@ -605,7 +605,8 @@ test.describe("changes since the previous update", () => {
       await expect(summary(page)).toBeVisible();
       await expect(summary(page)).toHaveText(
         `Since ${date}: ${formatCount(changes.entered.length)} funds entered, ` +
-          `${formatCount(changes.left.length)} left the passing list. No longer in the data: ${goneCode}.`,
+          `${formatCount(stillListed.length)} left the passing list. ` +
+          `1 more fund left the passing list and is no longer in the data: ${goneCode}.`,
       );
       expect(errors).toEqual([]);
     });
@@ -685,22 +686,25 @@ test.describe("changes since the previous update", () => {
       expect(errors).toEqual([]);
     });
 
-    test("the summary's counts link to those funds, keeping the other filters", async ({ page }) => {
-      await open(page, "?view=all&sort=code&dir=asc&q=a");
+    test("the summary's counts link to exactly those funds, clearing the other filters", async ({ page }) => {
+      await open(page, "?view=all&sort=code&dir=asc&q=a&risk=1");
+      // Each link's count is the number of rows it shows, so funds gone from
+      // the data aren't counted in the "left" link.
       const enteredLink = summary(page).getByRole("link", {
         name: `${formatCount(changes.entered.length)} funds entered`,
       });
-      const leftLink = summary(page).getByRole("link", { name: `${formatCount(changes.left.length)} left` });
-      await expect(enteredLink).toHaveAttribute("href", "/?sort=code&dir=asc&q=a&changed=entered");
-      await expect(leftLink).toHaveAttribute("href", "/?view=excluded&sort=code&dir=asc&q=a&changed=left");
+      const leftLink = summary(page).getByRole("link", { name: `${formatCount(stillListed.length)} left` });
+      await expect(enteredLink).toHaveAttribute("href", "/?sort=code&dir=asc&changed=entered");
+      await expect(leftLink).toHaveAttribute("href", "/?view=excluded&sort=code&dir=asc&changed=left");
       // The other parts of the summary are plain text.
       await expect(summary(page).locator("a")).toHaveCount(2);
       const historyLength = await page.evaluate(() => history.length);
 
-      await page.locator("#search").fill("");
       await enteredLink.click();
       await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
       await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(page.locator("#search")).toHaveValue("");
+      await expect(page.locator("#risk-filter")).toHaveValue("");
       await expect(rows(page)).toHaveCount(changes.entered.length);
       expect(await rowCodes(page)).toEqual(changes.entered);
       await expect(header(page, "code")).toHaveAttribute("aria-sort", "ascending");
@@ -759,20 +763,32 @@ test.describe("changes since the previous update", () => {
       await expect(rows(page)).toHaveCount(changes.entered.length);
       await expect.poll(() => params(page)).toEqual({ changed: "entered" });
 
-      // The select doesn't change the view: no fund that left still passes.
+      // No fund that left still passes, so the select switches to the Excluded view.
       await page.keyboard.press("ArrowDown");
       await expect(changeFilter(page)).toHaveValue("left");
-      await expect.poll(() => params(page)).toEqual({ changed: "left" });
-      await expect(rows(page)).toHaveCount(0);
-      await expect(page.locator("#empty")).toBeVisible();
+      await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
+      await expect.poll(() => params(page)).toEqual({ view: "excluded", changed: "left" });
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      expect(await rowCodes(page)).toEqual(stillListed);
       await expectCounts(page, { passing: 0, excluded: stillListed.length });
 
+      // And back to the Passing view for the funds that entered.
       await page.keyboard.press("ArrowUp");
+      await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
       await page.keyboard.press("ArrowUp");
       await expect(changeFilter(page)).toHaveValue("");
       await expect.poll(() => new URL(page.url()).search).toBe("");
       await expect(rows(page)).toHaveCount(passing.length);
       await expectCounts(page, { passing: passing.length, excluded: excluded.length });
+
+      // The All view lists both, so it stays.
+      await page.locator('[data-view="all"]').click();
+      await changeFilter(page).selectOption("left");
+      await expect(page.locator('[data-view="all"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      await expect.poll(() => params(page)).toEqual({ view: "all", changed: "left" });
     });
 
     test("the change filter combines with the type, risk and search filters", async ({ page }) => {
