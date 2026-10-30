@@ -36,6 +36,24 @@ A fund is shown only if it breaks none of these rules:
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
 
+### Rule evidence
+
+The Reason column shows only the first rule a fund breaks. The **Rules** button
+before each fund code opens a row under the fund with its result on all six
+rules: the fund's value (e.g. `3M 12.40%`, or `No 1Y return`), what the rule
+needs, and one of three outcomes:
+
+- **Pass:** the value meets the rule.
+- **Fail:** the value breaks the rule. Failures are tinted like the rule's
+  card, and the first one, which the Reason column shows, is marked `REASON`.
+- **Missing, allowed:** the value is absent and the rule allows that (a missing
+  3M, 6M or 1Y return, no Sharpe ratio, or fewer than two returns for the
+  longer-beats-shorter rule). A missing 1M return is a failure.
+
+The evidence comes from `ruleEvidence` in `filter.js`, and the Reason column's
+rule is its first failure, so the two always agree. Open rows stay open while
+you sort, search or filter, but aren't kept in the URL.
+
 ## Changes since the last update
 
 Under the banner, the page says how many funds entered or left the passing
@@ -209,8 +227,10 @@ npm test        # unit tests (Node 20+ and Python 3.9+)
 npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
-`npm test` runs the filter rule, Sharpe ratio, price line, data freshness,
-URL state, changes and CSV tests (`node --test`), then the Python tests in [`tests/`](tests/)
+`npm test` runs the filter rule and rule evidence (including a check over the
+committed data that every fund's reason is its first failing rule), Sharpe
+ratio, price line, data freshness, URL state, changes and CSV tests
+(`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
@@ -241,4 +261,8 @@ without errors when `previous.json` is missing or broken; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
-wide.
+wide; and that the rule evidence row shows six rules matching `ruleEvidence`
+(no failure for a passing fund, the Reason column's rule as the first failure
+for an excluded one, rule 6 as missing but allowed without a Sharpe ratio),
+opens and closes from the keyboard with `aria-expanded` following, stays open
+after a sort, search or view change, and fits a 320 px screen.
