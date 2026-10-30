@@ -386,7 +386,11 @@ test.describe("type and risk filters", () => {
   });
 
   test("can be used from the keyboard", async ({ page }) => {
+    // With a previous update, so the change filter is shown between the risk
+    // filter and the search.
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previousData().previous }));
     await open(page);
+    await expect(page.locator("#change-filter")).toBeVisible();
     await page.locator('[data-view="all"]').focus();
     await page.keyboard.press("Tab");
     await expect(typeFilter(page)).toBeFocused();
@@ -401,6 +405,8 @@ test.describe("type and risk filters", () => {
     await page.keyboard.press("ArrowDown");
     await expect(riskFilter(page)).toHaveValue("1");
     await expect.poll(() => params(page)).toEqual({ type: umbrellas[0], risk: "1" });
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#change-filter")).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.locator("#search")).toBeFocused();
   });
@@ -560,6 +566,24 @@ test.describe("changes since the previous update", () => {
     page.on("pageerror", (error) => errors.push(error.message));
     return errors;
   };
+  const changeFilter = (page) => page.locator("#change-filter");
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+  const byCode = new Map(funds.map((f) => [f.code, f]));
+  // The funds that left and still have a row.
+  const stillListed = changes.left.filter((code) => !changes.gone.includes(code));
+  // The codes of the table's rows, sorted as changes.js sorts them.
+  const rowCodes = async (page) =>
+    (await page.locator("#funds tbody td.col-code a").allTextContents()).sort((a, b) => a.localeCompare(b, "tr"));
+  async function expectCounts(page, { passing, excluded }) {
+    await expect(page.locator('[data-count="passing"]')).toHaveText(formatCount(passing));
+    await expect(page.locator('[data-count="excluded"]')).toHaveText(formatCount(excluded));
+    await expect(page.locator('[data-count="all"]')).toHaveText(formatCount(passing + excluded));
+  }
+  // The sticker and the rule cards always count every fund.
+  async function expectGlobalSummary(page) {
+    await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+  }
 
   test("the fixture has the changes it was built with", () => {
     expect(changes.entered).toEqual(expect.arrayContaining(enteredCodes));
@@ -632,6 +656,189 @@ test.describe("changes since the previous update", () => {
       expect(box.x + box.width).toBeLessThanOrEqual(320);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     });
+
+    test("?changed=entered shows exactly the funds that entered, and ?changed=left those that left", async ({
+      page,
+    }) => {
+      const errors = collectErrors(page);
+      await open(page, "?changed=entered");
+      await expect(changeFilter(page)).toBeVisible();
+      await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
+      expect(await rowCodes(page)).toEqual(changes.entered);
+      await expect(badges(page, "NEW")).toHaveCount(changes.entered.length);
+      await expectCounts(page, { passing: changes.entered.length, excluded: 0 });
+      await expectGlobalSummary(page);
+      expect(params(page)).toEqual({ changed: "entered" });
+
+      await open(page, "?view=excluded&changed=left");
+      await expect(changeFilter(page)).toHaveValue("left");
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      expect(await rowCodes(page)).toEqual(stillListed);
+      await expect(badges(page, "LEFT")).toHaveCount(stillListed.length);
+      await expectCounts(page, { passing: 0, excluded: stillListed.length });
+      await expectGlobalSummary(page);
+      // The summary still counts and lists every change, gone funds included.
+      await expect(summary(page)).toHaveText(changesSummary(changes, previous.fetchedAt));
+      expect(params(page)).toEqual({ view: "excluded", changed: "left" });
+      expect(errors).toEqual([]);
+    });
+
+    test("the summary's counts link to those funds, keeping the other filters", async ({ page }) => {
+      await open(page, "?view=all&sort=code&dir=asc&q=a");
+      const enteredLink = summary(page).getByRole("link", {
+        name: `${formatCount(changes.entered.length)} funds entered`,
+      });
+      const leftLink = summary(page).getByRole("link", { name: `${formatCount(changes.left.length)} left` });
+      await expect(enteredLink).toHaveAttribute("href", "/?sort=code&dir=asc&q=a&changed=entered");
+      await expect(leftLink).toHaveAttribute("href", "/?view=excluded&sort=code&dir=asc&q=a&changed=left");
+      // The other parts of the summary are plain text.
+      await expect(summary(page).locator("a")).toHaveCount(2);
+      const historyLength = await page.evaluate(() => history.length);
+
+      await page.locator("#search").fill("");
+      await enteredLink.click();
+      await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
+      expect(await rowCodes(page)).toEqual(changes.entered);
+      await expect(header(page, "code")).toHaveAttribute("aria-sort", "ascending");
+      expect(params(page)).toEqual({ sort: "code", dir: "asc", changed: "entered" });
+
+      await leftLink.click();
+      await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(changeFilter(page)).toHaveValue("left");
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      expect(await rowCodes(page)).toEqual(stillListed);
+      expect(params(page)).toEqual({ view: "excluded", sort: "code", dir: "asc", changed: "left" });
+      // In place, like the other controls: no reload and no history entry.
+      expect(await page.evaluate(() => history.length)).toBe(historyLength);
+
+      // A reload, and coming back with the Back button, restore the selection.
+      await page.reload();
+      await expect(changeFilter(page)).toHaveValue("left");
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      await page.goto("about:blank");
+      await page.goBack();
+      await expect(changeFilter(page)).toHaveValue("left");
+      await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
+      await expect(rows(page)).toHaveCount(stillListed.length);
+      expect(params(page)).toEqual({ view: "excluded", sort: "code", dir: "asc", changed: "left" });
+    });
+
+    test("a summary link drops a sort the new view can't use", async ({ page }) => {
+      await open(page, "?view=excluded&sort=reason&dir=asc");
+      const enteredLink = summary(page).getByRole("link", { name: /entered$/ });
+      await expect(enteredLink).toHaveAttribute("href", "/?changed=entered");
+      await enteredLink.click();
+      await expect(header(page, "1m")).toHaveAttribute("aria-sort", "descending");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
+      expect(params(page)).toEqual({ changed: "entered" });
+    });
+
+    test("the change filter works from the keyboard, and All funds removes it from the URL", async ({ page }) => {
+      await open(page);
+      await expect(changeFilter(page)).toBeVisible();
+      await expect(changeFilter(page)).toHaveAccessibleName("Change since the previous update");
+      await expect(changeFilter(page).locator("option")).toHaveText([
+        "All funds",
+        "Entered the passing list",
+        "Left the passing list",
+      ]);
+      await expect(changeFilter(page)).toHaveValue("");
+      await expect(rows(page)).toHaveCount(passing.length);
+
+      await page.locator("#risk-filter").focus();
+      await page.keyboard.press("Tab");
+      await expect(changeFilter(page)).toBeFocused();
+      const outline = await changeFilter(page).evaluate((el) => getComputedStyle(el).outlineStyle);
+      expect(outline).not.toBe("none");
+      await page.keyboard.press("ArrowDown");
+      await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
+      await expect.poll(() => params(page)).toEqual({ changed: "entered" });
+
+      // The select doesn't change the view: no fund that left still passes.
+      await page.keyboard.press("ArrowDown");
+      await expect(changeFilter(page)).toHaveValue("left");
+      await expect.poll(() => params(page)).toEqual({ changed: "left" });
+      await expect(rows(page)).toHaveCount(0);
+      await expect(page.locator("#empty")).toBeVisible();
+      await expectCounts(page, { passing: 0, excluded: stillListed.length });
+
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("ArrowUp");
+      await expect(changeFilter(page)).toHaveValue("");
+      await expect.poll(() => new URL(page.url()).search).toBe("");
+      await expect(rows(page)).toHaveCount(passing.length);
+      await expectCounts(page, { passing: passing.length, excluded: excluded.length });
+    });
+
+    test("the change filter combines with the type, risk and search filters", async ({ page }) => {
+      const entered = changes.entered.map((code) => byCode.get(code));
+      const fund = entered.find((f) => f.umbrella && f.risk);
+      const byType = entered.filter((f) => f.umbrella === fund.umbrella);
+      const both = byType.filter((f) => f.risk === fund.risk);
+
+      await open(page, "?changed=entered");
+      await expect(rows(page)).toHaveCount(entered.length);
+      await page.locator("#type-filter").selectOption(fund.umbrella);
+      await expect(rows(page)).toHaveCount(byType.length);
+      await expectCounts(page, { passing: byType.length, excluded: 0 });
+      await page.locator("#risk-filter").selectOption(String(fund.risk));
+      await expect(rows(page)).toHaveCount(both.length);
+      expect(await rowCodes(page)).toEqual(both.map((f) => f.code));
+      const expected = { type: fund.umbrella, risk: String(fund.risk), changed: "entered" };
+      await expect.poll(() => params(page)).toEqual(expected);
+
+      await page.locator("#search").fill(fund.code);
+      await expect(rows(page)).toHaveCount(1);
+      // A passing fund that didn't enter matches nothing here.
+      const unchanged = passing.find((f) => !changes.entered.includes(f.code));
+      await page.locator("#search").fill(unchanged.code);
+      await expect(rows(page)).toHaveCount(0);
+      await expect(page.locator("#empty")).toHaveText("No funds match.");
+      await expect(page.locator("#empty")).toBeVisible();
+      await expect(page.locator("#download-csv")).toBeDisabled();
+    });
+
+    test("the change filter and the linked summary fit a 320 px screen", async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 640 });
+      await open(page, "?changed=entered");
+      await expect(changeFilter(page)).toBeVisible();
+      for (const locator of [changeFilter(page), ...(await summary(page).locator("a").all())]) {
+        const box = await locator.boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(320);
+      }
+      expect((await changeFilter(page).boundingBox()).height).toBeGreaterThanOrEqual(44);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    });
+
+    test("a change filter in the URL waits for the previous update, with its select hidden", async ({ page }) => {
+      let release;
+      const released = new Promise((resolve) => {
+        release = resolve;
+      });
+      await page.unrouteAll();
+      await page.route("**/data/previous.json", async (route) => {
+        await released;
+        await route.fulfill({ json: previous });
+      });
+      await open(page, "?changed=entered");
+      // The unfiltered table, not labelled as the selection.
+      await expect(rows(page)).toHaveCount(passing.length);
+      await expect(changeFilter(page)).toBeHidden();
+      await expect(summary(page)).toBeHidden();
+      expect(params(page)).toEqual({ changed: "entered" });
+
+      release();
+      await expect(changeFilter(page)).toBeVisible();
+      await expect(changeFilter(page)).toHaveValue("entered");
+      await expect(rows(page)).toHaveCount(changes.entered.length);
+      await expectCounts(page, { passing: changes.entered.length, excluded: 0 });
+    });
   });
 
   test("the summary and badges match the committed previous update", async ({ page }) => {
@@ -670,6 +877,31 @@ test.describe("changes since the previous update", () => {
       await expect(summary(page), body).toBeHidden();
       await expect(page.locator("#funds tbody .badge"), body).toHaveCount(0);
       expect(errors, body).toEqual([]);
+    }
+  });
+
+  test("without a usable previous update, a change filter in the URL is dropped", async ({ page }) => {
+    for (const response of [
+      { status: 404, body: "" },
+      { contentType: "application/json", body: "not json" },
+      { contentType: "application/json", body: '{"funds": 5}' },
+    ]) {
+      const label = `${response.status ?? 200} ${response.body}`;
+      const errors = collectErrors(page);
+      let requested = false;
+      await page.unrouteAll();
+      await page.route("**/data/previous.json", (route) => {
+        requested = true;
+        return route.fulfill(response);
+      });
+      await open(page, "?view=all&changed=entered");
+      await expect.poll(() => requested, label).toBe(true);
+      await expect.poll(() => params(page), label).toEqual({ view: "all" });
+      await expect(changeFilter(page), label).toBeHidden();
+      await expect(summary(page), label).toBeHidden();
+      await expect(rows(page), label).toHaveCount(funds.length);
+      await expectCounts(page, { passing: passing.length, excluded: excluded.length });
+      expect(errors.filter((text) => !text.startsWith("Failed to load resource")), label).toEqual([]);
     }
   });
 });
@@ -800,6 +1032,22 @@ test.describe("CSV download", () => {
     // Names with Turkish capitals (İ, Ş, Ğ, Ö, Ü, Ç) come through as they are in the data.
     const turkish = excluded.find((f) => /[İŞĞÖÜÇ]/.test(f.name));
     expect(body.find((r) => r[0] === turkish.code)[1]).toBe(turkish.name);
+  });
+
+  test("follows the change filter", async ({ page }) => {
+    const { previous, changes } = previousData();
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previous }));
+    const stillListed = changes.left.filter((code) => !changes.gone.includes(code));
+    await open(page, "?view=excluded&changed=left");
+    await expect(page.locator("#change-filter")).toHaveValue("left");
+    await expect(rows(page)).toHaveCount(stillListed.length);
+    const file = await download(page);
+    expect(file.name).toBe(`tefas-funds-excluded-${day}.csv`);
+    const [header, ...body] = file.rows;
+    expect(header).toEqual([...PASSING_HEADER, "Reason"]);
+    expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+    expect(body.map((r) => r[0]).sort((a, b) => a.localeCompare(b, "tr"))).toEqual(stillListed);
+    for (const row of body) expect(row).toEqual(expectedRow(byCode.get(row[0]), true));
   });
 
   test("is disabled while no fund matches, and before the data loads", async ({ page }) => {

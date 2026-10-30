@@ -48,6 +48,12 @@
             <option value="6">Risk 6</option>
             <option value="7">Risk 7</option>
           </select>
+          <!-- Shown by app.js once data/previous.json has loaded. -->
+          <select id="change-filter" aria-label="Change since the previous update" hidden>
+            <option value="">All funds</option>
+            <option value="entered">Entered the passing list</option>
+            <option value="left">Left the passing list</option>
+          </select>
           <input id="search" type="search" placeholder="Search code, name or type" aria-label="Search funds" autocomplete="off">
           <!-- Enabled by app.js once the data has loaded, while any fund matches. -->
           <button id="download-csv" type="button" class="button-secondary" disabled>Download CSV</button>

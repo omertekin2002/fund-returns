@@ -13,10 +13,11 @@ The table can be narrowed to one fund type (umbrella) and one risk level
 filter). The Passing / Excluded / All counts follow these filters; the
 sticker, the summary and the rule cards always count every fund.
 The page URL keeps the view, sort, search and filters (e.g.
-`?view=excluded&sort=sharpe&dir=asc&q=ata` or
-`?type=Hisse+Senedi+Şemsiye+Fonu&risk=6`), so links can be shared (see
-[`site/urlstate.js`](site/urlstate.js)). A type that matches no fund, or a
-risk outside 1–7, is ignored.
+`?view=excluded&sort=sharpe&dir=asc&q=ata`,
+`?type=Hisse+Senedi+Şemsiye+Fonu&risk=6` or `?view=excluded&changed=left`),
+so links can be shared (see [`site/urlstate.js`](site/urlstate.js)). A type
+that matches no fund, a risk outside 1–7, or a `changed` other than `entered`
+or `left` is ignored.
 
 ## Criteria
 
@@ -75,8 +76,22 @@ codes.
   entered if it passes now and didn't pass before (or wasn't in the previous
   data); it left if it passed before and doesn't pass now (or is no longer in
   the data).
+- The change filter next to the type and risk filters narrows the table to
+  the funds that entered (**Entered the passing list**) or left (**Left the
+  passing list**) since the previous update, and combines with the view, the
+  other filters and the search. The Passing / Excluded / All counts follow
+  it; the sticker, the rule cards and the summary still count every fund.
+  The URL keeps it as `changed=entered` or `changed=left` (e.g.
+  `?view=excluded&changed=left`).
+- In the summary, the counts are links that apply the filter and switch to
+  the view that lists those funds: the funds that entered in the Passing
+  view, those that left in the Excluded view. They keep the other filters and
+  the search. Funds that left and are no longer in the data have no row, so
+  only the summary lists them.
 - Without `previous.json`, or with a broken one, the page shows nothing about
-  changes.
+  changes: the change filter stays hidden, and a `changed` in the URL is
+  removed. Until `previous.json` has loaded, the table shows every fund and
+  the change filter stays hidden.
 
 ## Sharpe ratio
 
@@ -257,7 +272,11 @@ warning appears only when the data is old; that a failed data request
 shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
 changes (and from the committed one), fit a 320 px screen, and are left out
-without errors when `previous.json` is missing or broken; and that Download
+without errors when `previous.json` is missing or broken; that the change
+filter and the summary's links show exactly the funds that entered or left,
+combine with the other filters, work from the keyboard and at 320 px wide, are
+kept in and restored from the URL, and are dropped from the URL when
+`previous.json` is missing or broken; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px

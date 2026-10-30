@@ -2,9 +2,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COLUMNS } from "../site/columns.js";
-import { DEFAULT_STATE, RISK_LEVELS, canSortBy, parseState, serializeState } from "../site/urlstate.js";
+import { CHANGES, DEFAULT_STATE, RISK_LEVELS, canSortBy, parseState, serializeState } from "../site/urlstate.js";
 
-const DEFAULTS = { view: "passing", query: "", sortKey: "1m", sortDir: "desc", type: "", risk: "" };
+const DEFAULTS = { view: "passing", query: "", sortKey: "1m", sortDir: "desc", type: "", risk: "", changed: "" };
 
 test("an empty query string gives the default state", () => {
   assert.deepEqual(parseState(""), DEFAULTS);
@@ -17,14 +17,18 @@ test("the default state serializes to no query string", () => {
 });
 
 test("reads every parameter", () => {
-  assert.deepEqual(parseState("?view=excluded&sort=sharpe&dir=asc&q=ak&type=Karma+%C5%9Eemsiye+Fonu&risk=3"), {
-    view: "excluded",
-    query: "ak",
-    sortKey: "sharpe",
-    sortDir: "asc",
-    type: "Karma Şemsiye Fonu",
-    risk: "3",
-  });
+  assert.deepEqual(
+    parseState("?view=excluded&sort=sharpe&dir=asc&q=ak&type=Karma+%C5%9Eemsiye+Fonu&risk=3&changed=left"),
+    {
+      view: "excluded",
+      query: "ak",
+      sortKey: "sharpe",
+      sortDir: "asc",
+      type: "Karma Şemsiye Fonu",
+      risk: "3",
+      changed: "left",
+    },
+  );
 });
 
 test("leaves out values at their default", () => {
@@ -168,6 +172,7 @@ test("the filters combine with the view, sort and search", () => {
     sortDir: "asc",
     type: "Hisse Senedi Şemsiye Fonu",
     risk: "6",
+    changed: "left",
   };
   assert.deepEqual(parseState(serializeState(state)), state);
   assert.deepEqual(parseState("?type=Hisse+Senedi+%C5%9Eemsiye+Fonu&risk=6&view=all"), {
@@ -176,4 +181,48 @@ test("the filters combine with the view, sort and search", () => {
     type: "Hisse Senedi Şemsiye Fonu",
     risk: "6",
   });
+});
+
+test("round-trips each change filter, left out when there is none", () => {
+  assert.deepEqual(CHANGES, ["entered", "left"]);
+  for (const changed of CHANGES) {
+    const state = { ...DEFAULTS, changed };
+    assert.equal(serializeState(state), `?changed=${changed}`);
+    assert.deepEqual(parseState(serializeState(state)), state);
+  }
+  assert.equal(serializeState({ ...DEFAULTS, changed: "" }), "");
+  // States written before the change filter existed have no `changed` at all.
+  const { changed, ...withoutChanged } = DEFAULTS;
+  assert.equal(serializeState({ ...withoutChanged, view: "all" }), "?view=all");
+});
+
+test("an invalid change filter falls back to none", () => {
+  for (const changed of ["", "ENTERED", "Left", "new", "both", " left", "entered ", "1", "toString", "__proto__"]) {
+    assert.deepEqual(parseState(`?changed=${encodeURIComponent(changed)}`), DEFAULTS, changed);
+  }
+  assert.deepEqual(parseState("?changed=nope&view=excluded&risk=6"), { ...DEFAULTS, view: "excluded", risk: "6" });
+  assert.deepEqual(parseState("?changed=left&changed=entered"), { ...DEFAULTS, changed: "left" });
+});
+
+test("the change filter combines with the view, sort, search and the other filters", () => {
+  assert.equal(
+    serializeState({
+      ...DEFAULTS,
+      view: "excluded",
+      query: "ak",
+      type: "Karma Şemsiye Fonu",
+      risk: "2",
+      changed: "left",
+    }),
+    "?view=excluded&q=ak&type=Karma+%C5%9Eemsiye+Fonu&risk=2&changed=left",
+  );
+  assert.deepEqual(parseState("?changed=entered&sort=code&dir=asc&q=x"), {
+    ...DEFAULTS,
+    changed: "entered",
+    sortKey: "code",
+    sortDir: "asc",
+    query: "x",
+  });
+  // A sort that falls back leaves the change filter alone.
+  assert.deepEqual(parseState("?sort=reason&changed=entered"), { ...DEFAULTS, changed: "entered" });
 });
