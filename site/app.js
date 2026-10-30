@@ -1,7 +1,7 @@
-import { changesSummary, classifyFunds, membershipChanges } from "./changes.js";
+import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes.js";
 import { COLUMNS, columnsFor } from "./columns.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
-import { RULES } from "./filter.js";
+import { RULES, ruleEvidence } from "./filter.js";
 import { isStale } from "./freshness.js";
 import { HEIGHT, polylinePoints, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
@@ -15,6 +15,12 @@ const state = {
   // previous update; empty until data/previous.json has loaded.
   entered: new Set(),
   left: new Set(),
+  // Whether those changes have loaded. Until then a change filter from the
+  // URL (state.changed) is kept but not applied, and its select is hidden.
+  changesLoaded: false,
+  // Codes of the funds whose rule evidence row is open. Kept while the page
+  // is open (not in the URL), so open rows stay open after a sort or search.
+  openEvidence: new Set(),
   ...parseState(location.search),
 };
 
@@ -32,6 +38,7 @@ const els = {
   download: document.getElementById("download-csv"),
   typeFilter: document.getElementById("type-filter"),
   riskFilter: document.getElementById("risk-filter"),
+  changeFilter: document.getElementById("change-filter"),
   viewButtons: document.querySelectorAll("[data-view]"),
 };
 
@@ -141,12 +148,14 @@ function compare(a, b, col) {
   return state.sortDir === "asc" ? result : -result;
 }
 
-// Funds of the chosen type and risk level. A risk filter never matches funds
-// with no risk level.
+// Funds of the chosen type and risk level, and once the changes have loaded,
+// of the chosen change. A risk filter never matches funds with no risk level.
 function filteredFunds() {
+  const changed = state.changesLoaded && state.changed ? state[state.changed] : null;
   return state.funds
     .filter((f) => !state.type || f.umbrella === state.type)
-    .filter((f) => !state.risk || f.risk === Number(state.risk));
+    .filter((f) => !state.risk || f.risk === Number(state.risk))
+    .filter((f) => !changed || changed.has(f.code));
 }
 
 function selectedFunds() {
@@ -184,15 +193,99 @@ function sparklineSvg(trend) {
   return svg;
 }
 
+const OUTCOME_TEXT = { pass: "Pass", fail: "Fail", "missing-allowed": "Missing, allowed" };
+
+// The id of a fund's evidence row, for the toggle's aria-controls.
+const evidenceId = (code) => `evidence-${code.replace(/[^\w-]/g, "_")}`;
+
+// The row under a fund's row that shows how the fund fares on each of the six
+// rules, spanning the table's `span` columns.
+function evidenceRow(fund, span) {
+  const tr = document.createElement("tr");
+  tr.className = "evidence-row";
+  tr.id = evidenceId(fund.code);
+  const td = document.createElement("td");
+  td.colSpan = span;
+  const list = document.createElement("ol");
+  list.className = "evidence";
+  list.setAttribute("aria-label", `How ${fund.code} fares on each rule`);
+  const entries = ruleEvidence(fund);
+  // The first failure is the one the Reason column shows.
+  const reason = entries.find((e) => e.outcome === "fail");
+  list.append(
+    ...entries.map((entry) => {
+      const index = RULES.findIndex((r) => r.id === entry.rule);
+      const li = document.createElement("li");
+      li.className = `evidence-item evidence-${entry.outcome}`;
+      li.dataset.rule = entry.rule;
+      li.dataset.outcome = entry.outcome;
+      const head = document.createElement("div");
+      head.className = "evidence-title";
+      const title = document.createElement("span");
+      title.textContent = `Rule ${index + 1} · ${RULES[index].title}`;
+      const outcome = document.createElement("strong");
+      outcome.className = "evidence-outcome";
+      outcome.textContent = OUTCOME_TEXT[entry.outcome];
+      const verdict = document.createElement("span");
+      verdict.className = "evidence-verdict";
+      if (entry === reason) verdict.append(badge("REASON", "The rule shown in the Reason column"), " ");
+      verdict.append(outcome);
+      head.append(title, " ", verdict);
+      const body = document.createElement("div");
+      // Failures are tinted with the colour of the rule's card above the table.
+      body.className = entry.outcome === "fail" ? `evidence-body rule-${entry.rule}` : "evidence-body";
+      const measured = document.createElement("p");
+      measured.className = "evidence-measured";
+      measured.textContent = entry.measured;
+      const requirement = document.createElement("p");
+      requirement.className = "evidence-requirement";
+      requirement.textContent = `Needs: ${entry.requirement}`;
+      body.append(measured, requirement);
+      li.append(head, body);
+      return li;
+    }),
+  );
+  td.append(list);
+  tr.append(td);
+  return tr;
+}
+
+// The button that opens and closes a fund's evidence row.
+function evidenceToggle(fund) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "evidence-toggle";
+  button.textContent = "Rules";
+  button.setAttribute("aria-label", `Rules for ${fund.code}`);
+  button.setAttribute("aria-controls", evidenceId(fund.code));
+  button.setAttribute("aria-expanded", String(state.openEvidence.has(fund.code)));
+  // Adds or removes just this row, so the rest of the table and the focus stay put.
+  button.addEventListener("click", () => {
+    const row = button.closest("tr");
+    if (state.openEvidence.has(fund.code)) {
+      state.openEvidence.delete(fund.code);
+      document.getElementById(evidenceId(fund.code))?.remove();
+      button.setAttribute("aria-expanded", "false");
+    } else {
+      state.openEvidence.add(fund.code);
+      row.after(evidenceRow(fund, row.cells.length));
+      button.setAttribute("aria-expanded", "true");
+    }
+  });
+  return button;
+}
+
 function renderBody() {
   const columns = visibleColumns();
-  const rows = selectedFunds().map((fund) => {
+  const funds = selectedFunds();
+  const rows = funds.flatMap((fund) => {
     const tr = document.createElement("tr");
     for (const col of columns) {
       const td = document.createElement("td");
       td.className = `col-${col.type} col-${col.key}`;
       const value = col.value(fund);
       if (col.key === "code") {
+        td.append(evidenceToggle(fund), " ");
         const link = document.createElement("a");
         link.href = `https://www.tefas.gov.tr/tr/fon-detayli-analiz/${encodeURIComponent(fund.code)}`;
         link.target = "_blank";
@@ -223,12 +316,12 @@ function renderBody() {
       }
       tr.append(td);
     }
-    return tr;
+    return state.openEvidence.has(fund.code) ? [tr, evidenceRow(fund, columns.length)] : [tr];
   });
   els.body.replaceChildren(...rows);
-  els.empty.hidden = rows.length > 0;
+  els.empty.hidden = funds.length > 0;
   // Nothing to download while no fund matches.
-  els.download.disabled = rows.length === 0;
+  els.download.disabled = funds.length === 0;
 }
 
 // Downloads the rows the table shows, in its order, as a CSV file.
@@ -247,7 +340,7 @@ function downloadCsv() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-// The view counts follow the type and risk filters but not the search.
+// The view counts follow the type, risk and change filters but not the search.
 function renderCounts() {
   const funds = filteredFunds();
   const passing = funds.filter((f) => !f.reason).length;
@@ -260,11 +353,26 @@ function renderCounts() {
   }
 }
 
+// The state a link in the changes summary selects: the funds that entered
+// (in the Passing view) or left (in the Excluded view), keeping the other
+// filters, the search and, where the view allows it, the sort.
+function changeState(changed) {
+  const next = { ...state, changed, view: changed === "entered" ? "passing" : "excluded" };
+  if (!canSortBy(next.view, next.sortKey)) {
+    next.sortKey = DEFAULT_STATE.sortKey;
+    next.sortDir = DEFAULT_STATE.sortDir;
+  }
+  return next;
+}
+
 // Keeps the view, sort, search and filters in the URL without adding history
-// entries.
+// entries, and the changes summary's links in step with them.
 function updateUrl() {
   const url = `${location.pathname}${serializeState(state)}${location.hash}`;
   history.replaceState(history.state, "", url);
+  for (const link of els.changes.querySelectorAll("a[data-changed]")) {
+    link.href = `${location.pathname}${serializeState(changeState(link.dataset.changed))}`;
+  }
 }
 
 function render() {
@@ -304,6 +412,7 @@ async function init() {
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],
+    ["changed", els.changeFilter],
   ]) {
     select.addEventListener("change", () => {
       state[key] = select.value;
@@ -366,28 +475,60 @@ async function init() {
   loadChanges();
 }
 
+// A link in the changes summary to the funds that entered or left. A plain
+// click selects them in place, like the other controls; a click with a
+// modifier key opens the link as usual.
+function changeLink({ text, changed }) {
+  const link = document.createElement("a");
+  link.textContent = text;
+  link.dataset.changed = changed;
+  link.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    Object.assign(state, changeState(changed));
+    els.changeFilter.value = state.changed;
+    render();
+  });
+  return link;
+}
+
 // Loads the previous update's data after the table is on screen, and marks
 // the funds that entered or left the passing list since then. Without
 // data/previous.json (before the first daily update keeps one) or with a
-// broken one, the page shows nothing about changes.
+// broken one, the page shows nothing about changes, and a change filter from
+// the URL is dropped.
 async function loadChanges() {
   let changes;
   let previousFetchedAt;
   try {
     const response = await fetch("data/previous.json", { cache: "no-cache" });
-    if (!response.ok) return;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const previous = await response.json();
-    if (!Array.isArray(previous?.funds)) return;
+    if (!Array.isArray(previous?.funds)) throw new Error("no funds");
     changes = membershipChanges(state.funds, classifyFunds(previous.funds));
     previousFetchedAt = previous.fetchedAt;
   } catch {
+    if (state.changed) {
+      state.changed = DEFAULT_STATE.changed;
+      updateUrl();
+    }
     return;
   }
   state.entered = new Set(changes.entered);
   state.left = new Set(changes.left);
-  els.changes.textContent = changesSummary(changes, previousFetchedAt);
+  state.changesLoaded = true;
+  // Built from text nodes and links, never from HTML.
+  els.changes.replaceChildren(
+    ...changesSummaryParts(changes, previousFetchedAt).map((part) =>
+      typeof part === "string" ? part : changeLink(part),
+    ),
+  );
   els.changes.hidden = false;
+  els.changeFilter.value = state.changed;
+  els.changeFilter.hidden = false;
+  renderCounts();
   renderBody();
+  updateUrl();
 }
 
 init();

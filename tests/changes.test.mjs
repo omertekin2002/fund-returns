@@ -1,7 +1,7 @@
 // Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
+import { changesSummary, changesSummaryParts, classifyFunds, membershipChanges } from "../site/changes.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 
 const PASSING_RETURNS = { "1m": 5, "3m": 15, "6m": 30, "1y": 60, ytd: 40, "3y": 200, "5y": null };
@@ -133,4 +133,30 @@ test("the summary works without a valid previous update time", () => {
       "Since the previous update: 1 fund left the passing list.",
     );
   }
+});
+
+test("the summary's parts mark the non-zero counts as links to those funds", () => {
+  const at = "2026-10-27T07:15:00Z";
+  const text = (parts) => parts.map((p) => (typeof p === "string" ? p : p.text)).join("");
+  const links = (parts) => parts.filter((p) => typeof p !== "string");
+  for (const [changes, expected] of [
+    [
+      { entered: ["A", "B", "C"], left: ["D", "E"], gone: [] },
+      [
+        { text: "3 funds entered", changed: "entered" },
+        { text: "2 left", changed: "left" },
+      ],
+    ],
+    [{ entered: ["A"], left: [], gone: [] }, [{ text: "1 fund entered", changed: "entered" }]],
+    [{ entered: [], left: ["D", "OLD"], gone: ["OLD"] }, [{ text: "2 funds left", changed: "left" }]],
+    [{ entered: [], left: [], gone: [] }, []],
+  ]) {
+    const parts = changesSummaryParts(changes, at);
+    assert.deepEqual(links(parts), expected);
+    // Joined, the parts are the summary, so the page's text is unchanged.
+    assert.equal(text(parts), changesSummary(changes, at));
+  }
+  // The codes of funds gone from the data stay plain text.
+  const parts = changesSummaryParts({ entered: [], left: ["OLD"], gone: ["OLD"] }, at);
+  assert.equal(parts.at(-1), " No longer in the data: OLD.");
 });
