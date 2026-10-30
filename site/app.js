@@ -353,16 +353,26 @@ function renderCounts() {
   }
 }
 
-// The state a link in the changes summary selects: the funds that entered
-// (in the Passing view) or left (in the Excluded view), keeping the other
-// filters, the search and, where the view allows it, the sort.
-function changeState(changed) {
-  const next = { ...state, changed, view: changed === "entered" ? "passing" : "excluded" };
-  if (!canSortBy(next.view, next.sortKey)) {
+// The view that lists the funds of a change: funds that entered all pass and
+// funds that left are all excluded.
+const CHANGE_VIEWS = { entered: "passing", left: "excluded" };
+
+// The state s in another view, dropping a sort that view can't use.
+function withView(s, view) {
+  const next = { ...s, view };
+  if (!canSortBy(view, next.sortKey)) {
     next.sortKey = DEFAULT_STATE.sortKey;
     next.sortDir = DEFAULT_STATE.sortDir;
   }
   return next;
+}
+
+// The state a link in the changes summary selects: the funds that entered
+// (in the Passing view) or left (in the Excluded view), keeping the sort where
+// the view allows it. It clears the type and risk filters and the search, so
+// the table shows as many funds as the link's count.
+function changeState(changed) {
+  return withView({ ...state, changed, type: "", risk: "", query: "" }, CHANGE_VIEWS[changed]);
 }
 
 // Keeps the view, sort, search and filters in the URL without adding history
@@ -399,11 +409,7 @@ async function init() {
   });
   for (const button of els.viewButtons) {
     button.addEventListener("click", () => {
-      state.view = button.dataset.view;
-      if (!canSortBy(state.view, state.sortKey)) {
-        state.sortKey = DEFAULT_STATE.sortKey;
-        state.sortDir = DEFAULT_STATE.sortDir;
-      }
+      Object.assign(state, withView(state, button.dataset.view));
       render();
     });
   }
@@ -416,6 +422,11 @@ async function init() {
   ]) {
     select.addEventListener("change", () => {
       state[key] = select.value;
+      // The Passing or Excluded view would list none of a change's funds, so
+      // a change switches to the view that lists them. The All view lists both.
+      if (key === "changed" && state.changed && state.view !== "all") {
+        Object.assign(state, withView(state, CHANGE_VIEWS[state.changed]));
+      }
       render();
     });
   }
@@ -487,6 +498,9 @@ function changeLink({ text, changed }) {
     event.preventDefault();
     Object.assign(state, changeState(changed));
     els.changeFilter.value = state.changed;
+    els.typeFilter.value = state.type;
+    els.riskFilter.value = state.risk;
+    els.search.value = state.query;
     render();
   });
   return link;

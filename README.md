@@ -61,8 +61,9 @@ Under the banner, the page says how many funds entered or left the passing
 list since the previous update, e.g. "Since 27 Oct 2026: 3 funds entered, 2
 left the passing list.", and marks those funds' rows with `NEW` (in the
 Passing and All views) or `LEFT` (in the Excluded and All views). Funds that
-left and are no longer in the data have no row, so the summary lists their
-codes.
+left and are no longer in the data have no row, so the summary counts them
+apart and lists their codes, e.g. "1 more fund left the passing list and is no
+longer in the data: OLD.".
 
 - Before each update, [`scripts/fetch_funds.py`](scripts/fetch_funds.py)
   keeps the existing `site/data/funds.json` as
@@ -78,15 +79,20 @@ codes.
   the data).
 - The change filter next to the type and risk filters narrows the table to
   the funds that entered (**Entered the passing list**) or left (**Left the
-  passing list**) since the previous update, and combines with the view, the
-  other filters and the search. The Passing / Excluded / All counts follow
-  it; the sticker, the rule cards and the summary still count every fund.
+  passing list**) since the previous update, and combines with the other
+  filters and the search. Funds that entered all pass and funds that left are
+  all excluded, so in the Passing or Excluded view it switches to the view
+  that lists them; the All view stays. The Passing / Excluded / All counts
+  follow it; the sticker, the rule cards and the summary still count every
+  fund.
   The URL keeps it as `changed=entered` or `changed=left` (e.g.
   `?view=excluded&changed=left`).
 - In the summary, the counts are links that apply the filter and switch to
   the view that lists those funds: the funds that entered in the Passing
-  view, those that left in the Excluded view. They keep the other filters and
-  the search. Funds that left and are no longer in the data have no row, so
+  view, those that left in the Excluded view. They keep the sort where the
+  view allows it, but clear the type and risk filters and the search, so the
+  table shows as many funds as the link says. Funds that left and are no
+  longer in the data have no row, so the "left" link doesn't count them and
   only the summary lists them.
 - Without `previous.json`, or with a broken one, the page shows nothing about
   changes: the change filter stays hidden, and a `changed` in the URL is
@@ -273,8 +279,9 @@ shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
 changes (and from the committed one), fit a 320 px screen, and are left out
 without errors when `previous.json` is missing or broken; that the change
-filter and the summary's links show exactly the funds that entered or left,
-combine with the other filters, work from the keyboard and at 320 px wide, are
+filter and the summary's links show exactly the funds that entered or left
+in the view that lists them (the filter combining with the other filters, the
+links clearing them), work from the keyboard and at 320 px wide, are
 kept in and restored from the URL, and are dropped from the URL when
 `previous.json` is missing or broken; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search

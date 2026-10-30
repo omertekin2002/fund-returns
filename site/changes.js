@@ -38,31 +38,39 @@ const funds = (n) => `${countFormat.format(n)} ${n === 1 ? "fund" : "funds"}`;
 // previousFetchedAt (an ISO timestamp), as a list of parts: plain text, and
 // { text, changed } for the counts of funds that entered or left (changed is
 // "entered" or "left"), which the page turns into links to those funds. Zero
-// counts are plain text. Joined, e.g. "Since 27 Oct 2026: 3 funds entered, 2
-// left the passing list."
+// counts are plain text. A link counts only the funds it shows, so funds that
+// left and are no longer in the data (which have no row) are counted and
+// listed by code after it. Joined, e.g. "Since 27 Oct 2026: 3 funds entered,
+// 2 left the passing list. 1 more fund left the passing list and is no longer
+// in the data: OLD."
 export function changesSummaryParts({ entered, left, gone }, previousFetchedAt) {
   const date = new Date(previousFetchedAt);
   const since =
     typeof previousFetchedAt === "string" && !Number.isNaN(date.getTime())
       ? `Since ${dateFormat.format(date)}`
       : "Since the previous update";
+  const listed = left.filter((code) => !gone.includes(code));
+  const goneText = (more) =>
+    `${countFormat.format(gone.length)}${more} ${gone.length === 1 ? "fund" : "funds"} left the passing list and ` +
+    `${gone.length === 1 ? "is" : "are"} no longer in the data: ${gone.join(", ")}.`;
+  if (entered.length === 0 && listed.length === 0) {
+    return [`${since}: ${gone.length > 0 ? goneText("") : "no fund entered or left the passing list."}`];
+  }
   let parts;
-  if (entered.length === 0 && left.length === 0) {
-    parts = [`${since}: no fund entered or left the passing list.`];
-  } else if (left.length === 0) {
+  if (listed.length === 0) {
     parts = [`${since}: `, { text: `${funds(entered.length)} entered`, changed: "entered" }, " the passing list."];
   } else if (entered.length === 0) {
-    parts = [`${since}: `, { text: `${funds(left.length)} left`, changed: "left" }, " the passing list."];
+    parts = [`${since}: `, { text: `${funds(listed.length)} left`, changed: "left" }, " the passing list."];
   } else {
     parts = [
       `${since}: `,
       { text: `${funds(entered.length)} entered`, changed: "entered" },
       ", ",
-      { text: `${countFormat.format(left.length)} left`, changed: "left" },
+      { text: `${countFormat.format(listed.length)} left`, changed: "left" },
       " the passing list.",
     ];
   }
-  if (gone.length > 0) parts.push(` No longer in the data: ${gone.join(", ")}.`);
+  if (gone.length > 0) parts.push(` ${goneText(" more")}`);
   return parts;
 }
 

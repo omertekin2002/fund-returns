@@ -119,10 +119,26 @@ test("the summary counts the funds that entered and left, dated in Istanbul time
   );
 });
 
-test("the summary lists the funds gone from the data by code", () => {
+test("the summary counts the funds gone from the data apart, and lists them by code", () => {
+  const at = "2026-10-27T07:15:00Z";
+  // The "left" count is the funds that still have a row, which its link shows.
   assert.equal(
-    changesSummary({ entered: ["A"], left: ["D", "OLD1", "OLD2"], gone: ["OLD1", "OLD2"] }, "2026-10-27T07:15:00Z"),
-    "Since 27 Oct 2026: 1 fund entered, 3 left the passing list. No longer in the data: OLD1, OLD2.",
+    changesSummary({ entered: ["A"], left: ["D", "OLD1", "OLD2"], gone: ["OLD1", "OLD2"] }, at),
+    "Since 27 Oct 2026: 1 fund entered, 1 left the passing list. " +
+      "2 more funds left the passing list and are no longer in the data: OLD1, OLD2.",
+  );
+  assert.equal(
+    changesSummary({ entered: ["A"], left: ["OLD"], gone: ["OLD"] }, at),
+    "Since 27 Oct 2026: 1 fund entered the passing list. " +
+      "1 more fund left the passing list and is no longer in the data: OLD.",
+  );
+  assert.equal(
+    changesSummary({ entered: [], left: ["OLD"], gone: ["OLD"] }, at),
+    "Since 27 Oct 2026: 1 fund left the passing list and is no longer in the data: OLD.",
+  );
+  assert.equal(
+    changesSummary({ entered: [], left: ["OLD1", "OLD2"], gone: ["OLD1", "OLD2"] }, at),
+    "Since 27 Oct 2026: 2 funds left the passing list and are no longer in the data: OLD1, OLD2.",
   );
 });
 
@@ -148,7 +164,9 @@ test("the summary's parts mark the non-zero counts as links to those funds", () 
       ],
     ],
     [{ entered: ["A"], left: [], gone: [] }, [{ text: "1 fund entered", changed: "entered" }]],
-    [{ entered: [], left: ["D", "OLD"], gone: ["OLD"] }, [{ text: "2 funds left", changed: "left" }]],
+    // Funds gone from the data have no row, so the link doesn't count them.
+    [{ entered: [], left: ["D", "OLD"], gone: ["OLD"] }, [{ text: "1 fund left", changed: "left" }]],
+    [{ entered: [], left: ["OLD"], gone: ["OLD"] }, []],
     [{ entered: [], left: [], gone: [] }, []],
   ]) {
     const parts = changesSummaryParts(changes, at);
@@ -157,6 +175,6 @@ test("the summary's parts mark the non-zero counts as links to those funds", () 
     assert.equal(text(parts), changesSummary(changes, at));
   }
   // The codes of funds gone from the data stay plain text.
-  const parts = changesSummaryParts({ entered: [], left: ["OLD"], gone: ["OLD"] }, at);
-  assert.equal(parts.at(-1), " No longer in the data: OLD.");
+  const parts = changesSummaryParts({ entered: [], left: ["D", "OLD"], gone: ["OLD"] }, at);
+  assert.equal(parts.at(-1), " 1 more fund left the passing list and is no longer in the data: OLD.");
 });
