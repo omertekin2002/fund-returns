@@ -338,6 +338,8 @@ h1 {
 .table-wrap {
   overflow-x: auto;
   border: var(--hairline);
+  /* Lets an evidence row size itself to the visible width (100cqi). */
+  container-type: inline-size;
 }
 
 table {
@@ -431,6 +433,89 @@ th button[data-dir="desc"]::after {
 
 .col-umbrella {
   min-width: 140px;
+}
+
+/* The "Rules" toggle before each fund code: a small square outlined button
+   (button-secondary chrome), inverted while its evidence row is open. */
+.evidence-toggle {
+  margin: 0;
+  padding: 2px var(--space-xs);
+  border: var(--hairline);
+  border-radius: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 700 10px/1.2 var(--font-ui);
+  text-transform: uppercase;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+
+.evidence-toggle::after {
+  content: " ▸";
+}
+
+.evidence-toggle[aria-expanded="true"] {
+  background: var(--frame-ink);
+  color: var(--on-primary);
+}
+
+.evidence-toggle[aria-expanded="true"]::after {
+  content: " ▾";
+}
+
+/* A fund's result on each rule, in the row under the fund. The list keeps to
+   the visible width of the table and stays in view while the table scrolls
+   sideways, so phones read it without scrolling. */
+.evidence-row > td {
+  padding: 0;
+}
+
+.evidence {
+  position: sticky;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-sm);
+  max-width: 100cqi;
+  margin: 0;
+  padding: var(--space-md);
+  list-style: none;
+}
+
+.evidence-item {
+  border: var(--hairline);
+}
+
+/* The rule on the left, its outcome (and REASON on the first failure) on the
+   right, wrapping under the rule when the card is narrow. */
+.evidence-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: var(--hairline);
+  font: 700 11px/1.3 var(--font-ui);
+  text-transform: uppercase;
+}
+
+.evidence-verdict {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.evidence-body {
+  padding: var(--space-xs) var(--space-sm);
+  overflow-wrap: anywhere;
+}
+
+.evidence-measured {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge-reason {
+  background: var(--yellow-sticker);
 }
 
 /* The 4-week price line: a black stroke on the white row, no fill (DESIGN.md:

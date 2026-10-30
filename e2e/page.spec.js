@@ -1,9 +1,10 @@
 // Run with: npm run test:e2e
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { RULES } from "../site/filter.js";
+import { RULES, ruleEvidence } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { istanbulDate } from "../site/freshness.js";
+import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import {
   committedPrevious,
   data,
@@ -839,5 +840,158 @@ test.describe("CSV download", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     const file = await download(page);
     expect(file.rows).toHaveLength(passing.length + 1);
+  });
+});
+
+test.describe("rule evidence row", () => {
+  const exact = (code) => new RegExp(`^${code}$`);
+  const fundRow = (page, code) =>
+    page.locator("#funds tbody tr", { has: page.locator("td.col-code a", { hasText: exact(code) }) });
+  const toggle = (page, code) => fundRow(page, code).locator("button.evidence-toggle");
+  const evidence = (page, code) => page.locator(`#evidence-${code}`);
+  const items = (page, code) => evidence(page, code).locator("li");
+  const OUTCOME_TEXT = { pass: "Pass", fail: "Fail", "missing-allowed": "Missing, allowed" };
+
+  // Each rule's title, outcome, measured value and requirement, as the row shows them.
+  async function expectEvidence(page, fund) {
+    const entries = ruleEvidence(fund);
+    await expect(items(page, fund.code)).toHaveCount(RULES.length);
+    for (const [i, entry] of entries.entries()) {
+      const item = items(page, fund.code).nth(i);
+      await expect(item).toHaveAttribute("data-rule", RULES[i].id);
+      await expect(item).toHaveAttribute("data-outcome", entry.outcome);
+      await expect(item.locator(".evidence-title")).toContainText(`Rule ${i + 1} · ${RULES[i].title}`);
+      await expect(item.locator(".evidence-outcome")).toHaveText(OUTCOME_TEXT[entry.outcome]);
+      await expect(item.locator(".evidence-measured")).toHaveText(entry.measured);
+      await expect(item.locator(".evidence-requirement")).toHaveText(`Needs: ${entry.requirement}`);
+    }
+  }
+
+  test("a passing fund's evidence shows all six rules with no failure", async ({ page }) => {
+    const fund = passing[0];
+    await open(page, `?q=${encodeURIComponent(fund.code)}`);
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-controls", `evidence-${fund.code}`);
+    await expect(evidence(page, fund.code)).toHaveCount(0);
+
+    await toggle(page, fund.code).click();
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "true");
+    await expect(evidence(page, fund.code)).toBeVisible();
+    await expectEvidence(page, fund);
+    await expect(items(page, fund.code).filter({ hasText: "Fail" })).toHaveCount(0);
+    await expect(evidence(page, fund.code).locator(".badge-reason")).toHaveCount(0);
+    // The evidence row sits right under the fund's row and spans every column.
+    const colspan = await evidence(page, fund.code).locator("td").getAttribute("colspan");
+    expect(Number(colspan)).toBe(await page.locator("#header-row th").count());
+    expect(await fundRow(page, fund.code).evaluate((tr) => tr.nextElementSibling?.id)).toBe(`evidence-${fund.code}`);
+
+    await toggle(page, fund.code).click();
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "false");
+    await expect(evidence(page, fund.code)).toHaveCount(0);
+  });
+
+  test("an excluded fund's first failure is the Reason column's rule", async ({ page }) => {
+    // A fund that also breaks a later rule, so more than one rule fails.
+    const fund = excluded.find((f) => ruleEvidence(f).filter((e) => e.outcome === "fail").length > 1) ?? excluded[0];
+    await open(page, `?view=excluded&q=${encodeURIComponent(fund.code)}`);
+    await expect(fundRow(page, fund.code).locator("td.col-reason")).toHaveText(fund.reason.detail);
+    await toggle(page, fund.code).click();
+    await expectEvidence(page, fund);
+    const firstFail = items(page, fund.code).and(page.locator('[data-outcome="fail"]')).first();
+    await expect(firstFail).toHaveAttribute("data-rule", fund.reason.rule);
+    await expect(firstFail.locator(".badge-reason")).toHaveText("REASON");
+    await expect(firstFail.locator(".evidence-body")).toHaveClass(new RegExp(`rule-${fund.reason.rule}`));
+    await expect(evidence(page, fund.code).locator(".badge-reason")).toHaveCount(1);
+  });
+
+  test("a fund without a Sharpe ratio shows rule 6 as missing but allowed", async ({ page }) => {
+    let fund = funds.find((f) => f.sharpe === null);
+    if (!fund) {
+      // No such fund in today's data: drop the prices of a fund that a return
+      // rule already excludes, so its membership and the counts stay the same.
+      fund = excluded.find((f) => f.reason.rule !== "min-sharpe" && f.umbrella !== RISK_FREE_UMBRELLA);
+      const withoutPrices = {
+        ...data,
+        funds: data.funds.map((f) => (f.code === fund.code ? { ...f, prices: f.prices.map(() => null) } : f)),
+      };
+      await page.route("**/data/funds.json", (route) => route.fulfill({ json: withoutPrices }));
+      fund = { ...fund, sharpe: null };
+    }
+    await open(page, `?view=all&q=${encodeURIComponent(fund.code)}`);
+    await toggle(page, fund.code).click();
+    const sharpe = items(page, fund.code).nth(5);
+    await expect(sharpe).toHaveAttribute("data-rule", "min-sharpe");
+    await expect(sharpe).toHaveAttribute("data-outcome", "missing-allowed");
+    await expect(sharpe.locator(".evidence-outcome")).toHaveText("Missing, allowed");
+    await expect(sharpe.locator(".evidence-measured")).toHaveText(/^No Sharpe ratio/);
+  });
+
+  test("the toggle works from the keyboard and keeps the focus", async ({ page }) => {
+    const fund = passing[0];
+    await open(page, `?q=${encodeURIComponent(fund.code)}`);
+    await toggle(page, fund.code).focus();
+    await page.keyboard.press("Enter");
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "true");
+    await expect(evidence(page, fund.code)).toBeVisible();
+    await expect(toggle(page, fund.code)).toBeFocused();
+    const outline = await toggle(page, fund.code).evaluate((el) => getComputedStyle(el).outlineStyle);
+    expect(outline).not.toBe("none");
+    await page.keyboard.press("Space");
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "false");
+    await expect(evidence(page, fund.code)).toHaveCount(0);
+    await page.keyboard.press("Space");
+    await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("open rows stay open after a sort, a search and a view change, and stay out of the URL", async ({ page }) => {
+    const [first, second] = [passing[0], excluded[0]];
+    await open(page, "?view=all");
+    await page.locator("#search").fill(first.code);
+    await toggle(page, first.code).click();
+    await page.locator("#search").fill(second.code);
+    await toggle(page, second.code).click();
+    await page.locator("#search").fill("");
+    await expect(rows(page)).toHaveCount(funds.length + 2);
+
+    await header(page, "code").getByRole("button").click();
+    await expect(header(page, "code")).toHaveAttribute("aria-sort", "ascending");
+    for (const fund of [first, second]) {
+      await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "true");
+      expect(await fundRow(page, fund.code).evaluate((tr) => tr.nextElementSibling?.id)).toBe(`evidence-${fund.code}`);
+    }
+    // Only the fund rows are sorted: the codes are still in order.
+    const codes = funds.map((f) => f.code).sort((a, b) => a.localeCompare(b, "tr"));
+    await expect(page.locator("#funds tbody td.col-code a")).toHaveText(codes);
+
+    // In the Passing view only the passing fund's row is listed, still open.
+    await page.locator('[data-view="passing"]').click();
+    await expect(evidence(page, first.code)).toBeVisible();
+    await expect(evidence(page, second.code)).toHaveCount(0);
+    await expect(evidence(page, first.code).locator("td")).toHaveAttribute(
+      "colspan",
+      String(await page.locator("#header-row th").count()),
+    );
+    await page.locator('[data-view="all"]').click();
+    await expect(evidence(page, second.code)).toBeVisible();
+    expect(new URL(page.url()).searchParams.has("open")).toBe(false);
+    expect([...new URL(page.url()).searchParams.keys()].sort()).toEqual(["dir", "sort", "view"]);
+  });
+
+  test("fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    const fund = excluded[0];
+    await open(page, `?view=excluded&q=${encodeURIComponent(fund.code)}`);
+    await toggle(page, fund.code).click();
+    const list = evidence(page, fund.code).locator("ol");
+    await expect(list).toBeVisible();
+    const cards = await items(page, fund.code).all();
+    const boxes = [await list.boundingBox(), ...(await Promise.all(cards.map((li) => li.boundingBox())))];
+    for (const box of boxes) {
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    // The list doesn't scroll sideways inside itself either.
+    expect(await list.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
 });
