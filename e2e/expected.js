@@ -3,6 +3,7 @@
 // update changes the counts.
 import { existsSync, readFileSync } from "node:fs";
 import { classifyFunds, membershipChanges } from "../site/changes.js";
+import { dataCoverage } from "../site/coverage.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import { sparkline } from "../site/sparkline.js";
@@ -18,6 +19,10 @@ export const committedPrevious = existsSync(previousUrl) ? JSON.parse(readFileSy
 
 // Whether each fund has a 4-week price line (at least two valid prices), by code.
 export const hasTrend = new Map(funds.map((f) => [f.code, sparkline(f.prices, data.priceDates.length) !== null]));
+
+// The price window and the counts of funds without a 1M return, a Sharpe
+// ratio or a risk level, over every fund.
+export const coverage = dataCoverage(data, funds);
 
 export const passing = funds.filter((f) => !f.reason);
 export const excluded = funds.filter((f) => f.reason);

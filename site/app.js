@@ -1,5 +1,6 @@
 import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes.js";
 import { COLUMNS, columnsFor } from "./columns.js";
+import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { RULES, ruleEvidence } from "./filter.js";
 import { isStale } from "./freshness.js";
@@ -28,6 +29,8 @@ const els = {
   status: document.getElementById("status"),
   sticker: document.getElementById("pass-sticker"),
   updated: document.getElementById("updated"),
+  priceDates: document.getElementById("price-dates"),
+  coverage: document.getElementById("coverage"),
   stale: document.getElementById("stale"),
   changes: document.getElementById("changes"),
   rules: document.getElementById("rules"),
@@ -464,6 +467,12 @@ async function init() {
     const stale = isStale(data.fetchedAt);
     els.updated.textContent = fetchedAt ? `Updated ${fetchedAt}` : "Update time unknown";
     els.updated.title = "Istanbul time";
+    // Counted over every fund, so they don't follow the view, filters or search.
+    const coverage = dataCoverage(data, state.funds);
+    els.priceDates.textContent = priceWindowText(coverage.window);
+    els.priceDates.title = "The first and last day with TEFAS prices in the data";
+    els.coverage.textContent = coverageText(coverage.counts);
+    els.coverage.hidden = false;
     els.status.textContent =
       `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against six rules. " +

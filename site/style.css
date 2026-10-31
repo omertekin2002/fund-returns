@@ -602,6 +602,12 @@ td.col-sparkline {
     font-size: 14px;
   }
 
+  /* A long price window (e.g. across a new year) wraps instead of running
+     off a 320px screen. */
+  .callout {
+    white-space: normal;
+  }
+
   /* 44px touch targets on phones. */
   .view-toggle {
     display: flex;
