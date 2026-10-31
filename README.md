@@ -99,6 +99,24 @@ longer in the data: OLD.".
   removed. Until `previous.json` has loaded, the table shows every fund and
   the change filter stays hidden.
 
+## Coverage
+
+Next to the update time, the banner names the price dates the data holds:
+the first and last day with TEFAS prices and how many there are, e.g.
+`Prices 2 Oct – 30 Oct 2026 (20 days)` (days without prices, such as
+holidays, are not counted). These are the days behind the Sharpe ratios and
+the 4-week lines. TEFAS gives no date for the period returns, so the page
+doesn't give one either. Without valid `priceDates` in the data file it says
+`Price dates unknown`.
+
+Under the summary in the panel below the table, one sentence says how many
+funds have no 1M return (rule 1 excludes them), no Sharpe ratio (rule 6
+allows that) and no risk level, e.g. "Of 1,071 funds, 9 have no 1M return
+(rule 1 excludes them), 8 have no Sharpe ratio (rule 6 allows that) and 117
+have no risk level." A count of 0 is left out. The counts cover every fund in
+the data, whatever the view, filters or search. Both lines are worked out by
+[`site/coverage.js`](site/coverage.js).
+
 ## Sharpe ratio
 
 The **Sharpe** column is each fund's Sharpe ratio over the last four weeks of
@@ -250,7 +268,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
-ratio, price line, data freshness, URL state, changes and CSV tests
+ratio, price line, data freshness, coverage, URL state, changes and CSV tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
@@ -273,7 +291,10 @@ and restored from the URL; that every fund with two prices has a labelled
 sorted; that the type and risk filters list the types in
 the data, narrow the rows and view counts (but not the sticker or rule
 cards), work from the keyboard and at 320 px wide, and are kept in and
-restored from the URL, with unknown values ignored; that the stale data
+restored from the URL, with unknown values ignored; that the banner's price dates and the coverage sentence match what
+`coverage.js` works out from the data, don't change with the view, filters or
+search, say `Price dates unknown` without errors when `priceDates` is missing
+or malformed, and fit a 320 px screen; that the stale data
 warning appears only when the data is old; that a failed data request
 shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
