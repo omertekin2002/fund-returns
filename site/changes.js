@@ -1,7 +1,7 @@
 // Which funds entered or left the passing list since the previous update.
 // data/previous.json is the last earlier day's data/funds.json (kept by
 // scripts/fetch_funds.py); both are classified with the same rules.
-import { exclusionReason } from "./filter.js";
+import { exclusionReason, ruleEvidence } from "./filter.js";
 import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 
 // Adds each fund's 4-week Sharpe ratio and its exclusion reason (null if it
@@ -34,6 +34,38 @@ const dateFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Istanbul
 
 const funds = (n) => `${countFormat.format(n)} ${n === 1 ? "fund" : "funds"}`;
 
+// The day of the previous update fetched at previousFetchedAt (an ISO
+// timestamp) in Istanbul time, e.g. "27 Oct 2026", or null when the time is
+// missing or invalid.
+export function previousDate(previousFetchedAt) {
+  const date = new Date(previousFetchedAt);
+  if (typeof previousFetchedAt !== "string" || Number.isNaN(date.getTime())) return null;
+  return dateFormat.format(date);
+}
+
+// How a fund's result on each rule compares with the previous update, for a
+// fund that entered or left the passing list. Both funds are classified (see
+// classifyFunds), each with its own file's Sharpe ratio; previousFund is
+// null or undefined when the fund wasn't in the previous data. Returns
+// { inPrevious, rules }, with one entry per rule in RULES order:
+//   rule:     the rule id;
+//   current:  today's ruleEvidence entry;
+//   previous: the previous update's ruleEvidence entry, or null when the fund
+//             wasn't in the previous data;
+//   changed:  whether the outcome differs between the two updates (always
+//             false without a previous entry).
+export function evidenceChanges(currentFund, previousFund) {
+  const before = previousFund ? ruleEvidence(previousFund) : null;
+  return {
+    inPrevious: before !== null,
+    rules: ruleEvidence(currentFund).map((current, i) => {
+      const previous = before ? before[i] : null;
+      const changed = previous !== null && previous.outcome !== current.outcome;
+      return { rule: current.rule, current, previous, changed };
+    }),
+  };
+}
+
 // The one-line summary of the changes since the previous update fetched at
 // previousFetchedAt (an ISO timestamp), as a list of parts: plain text, and
 // { text, changed } for the counts of funds that entered or left (changed is
@@ -44,11 +76,8 @@ const funds = (n) => `${countFormat.format(n)} ${n === 1 ? "fund" : "funds"}`;
 // 2 left the passing list. 1 more fund left the passing list and is no longer
 // in the data: OLD."
 export function changesSummaryParts({ entered, left, gone }, previousFetchedAt) {
-  const date = new Date(previousFetchedAt);
-  const since =
-    typeof previousFetchedAt === "string" && !Number.isNaN(date.getTime())
-      ? `Since ${dateFormat.format(date)}`
-      : "Since the previous update";
+  const date = previousDate(previousFetchedAt);
+  const since = date ? `Since ${date}` : "Since the previous update";
   const listed = left.filter((code) => !gone.includes(code));
   const goneText = (more) =>
     `${countFormat.format(gone.length)}${more} ${gone.length === 1 ? "fund" : "funds"} left the passing list and ` +
