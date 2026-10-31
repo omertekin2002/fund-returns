@@ -3,6 +3,7 @@
 // update changes the counts.
 import { existsSync, readFileSync } from "node:fs";
 import { classifyFunds, membershipChanges } from "../site/changes.js";
+import { dataCoverage } from "../site/coverage.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import { sparkline } from "../site/sparkline.js";
@@ -18,6 +19,10 @@ export const committedPrevious = existsSync(previousUrl) ? JSON.parse(readFileSy
 
 // Whether each fund has a 4-week price line (at least two valid prices), by code.
 export const hasTrend = new Map(funds.map((f) => [f.code, sparkline(f.prices, data.priceDates.length) !== null]));
+
+// The price window and the counts of funds without a 1M return, a Sharpe
+// ratio or a risk level, over every fund.
+export const coverage = dataCoverage(data, funds);
 
 export const passing = funds.filter((f) => !f.reason);
 export const excluded = funds.filter((f) => f.reason);
@@ -46,8 +51,9 @@ export function filtered({ type = "", risk = "" } = {}) {
 // A previous.json for the change specs: the committed data a day earlier,
 // with known changes. Two passing funds failed the 1M rule then (so they
 // entered), two excluded funds had a passing fund's returns and prices then
-// (so they left), and a passing fund no longer in the data (so it left and is
-// gone). Money market funds are left alone so the risk-free return is the
+// (so they left), a passing fund no longer in the data (so it left and is
+// gone), and another passing fund was not in the data yet (so it entered by
+// appearing). Money market funds are left alone so the risk-free return is the
 // same. The expected changes are worked out with changes.js, as the page does.
 export function previousData() {
   const enteredCodes = passing.slice(0, 2).map((f) => f.code);
@@ -57,16 +63,21 @@ export function previousData() {
     .map((f) => f.code);
   const donor = data.funds.find((f) => f.code === passing.find((p) => p.umbrella !== RISK_FREE_UMBRELLA).code);
   const goneFund = { ...donor, code: "ZZGONE", name: "GONE FUND" };
-  const previousFunds = data.funds.map((raw) => {
-    if (enteredCodes.includes(raw.code)) return { ...raw, returns: { ...raw.returns, "1m": 0 } };
-    if (leftCodes.includes(raw.code)) return { ...raw, returns: donor.returns, prices: donor.prices };
-    return raw;
-  });
+  const newCode = passing.find(
+    (f) => f.umbrella !== RISK_FREE_UMBRELLA && f.code !== donor.code && !enteredCodes.includes(f.code),
+  ).code;
+  const previousFunds = data.funds
+    .filter((raw) => raw.code !== newCode)
+    .map((raw) => {
+      if (enteredCodes.includes(raw.code)) return { ...raw, returns: { ...raw.returns, "1m": 0 } };
+      if (leftCodes.includes(raw.code)) return { ...raw, returns: donor.returns, prices: donor.prices };
+      return raw;
+    });
   const previous = {
     ...data,
     fetchedAt: new Date(new Date(data.fetchedAt).getTime() - 24 * 60 * 60 * 1000).toISOString(),
     funds: [...previousFunds, goneFund],
   };
   const changes = membershipChanges(funds, classifyFunds(previous.funds));
-  return { previous, changes, enteredCodes, leftCodes, goneCode: goneFund.code };
+  return { previous, changes, enteredCodes, leftCodes, goneCode: goneFund.code, newCode };
 }

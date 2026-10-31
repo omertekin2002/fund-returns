@@ -2,11 +2,13 @@
 import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { RULES, ruleEvidence } from "../site/filter.js";
-import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
+import { changesSummary, classifyFunds, evidenceChanges, membershipChanges, previousDate } from "../site/changes.js";
+import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import {
   committedPrevious,
+  coverage,
   data,
   excluded,
   filtered,
@@ -523,6 +525,132 @@ test.describe("4-week price line", () => {
   });
 });
 
+test.describe("price dates and coverage", () => {
+  const priceDates = (page) => page.locator("#price-dates");
+  const sentence = (page) => page.locator("#coverage");
+  // A date as the page formats price dates, e.g. "30 Oct 2026".
+  const fullDate = (day) =>
+    new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium" }).format(new Date(`${day}T00:00:00Z`));
+  const collectErrors = (page) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    return errors;
+  };
+
+  test("the banner shows the first and last price date and their number", async ({ page }) => {
+    await open(page);
+    const first = data.priceDates[0];
+    const last = data.priceDates.at(-1);
+    expect(coverage.window).toEqual({ first, last, count: data.priceDates.length });
+    await expect(priceDates(page)).toHaveText(priceWindowText(coverage.window));
+    await expect(priceDates(page)).toContainText(fullDate(last));
+    await expect(priceDates(page)).toContainText(`(${data.priceDates.length} days)`);
+    // Price dates, not a date for the period returns.
+    await expect(priceDates(page)).toHaveText(/^Prices /);
+    await expect(page.locator("#updated")).toHaveText(/^Updated /);
+  });
+
+  test("the rail counts the funds without a 1M return, a Sharpe ratio or a risk level", async ({ page }) => {
+    await open(page);
+    const counts = {
+      total: funds.length,
+      noMonthReturn: funds.filter((f) => f.returns["1m"] == null).length,
+      noSharpe: funds.filter((f) => f.sharpe == null).length,
+      noRisk: funds.filter((f) => f.risk == null).length,
+    };
+    expect(coverage.counts).toEqual(counts);
+    await expect(sentence(page)).toBeVisible();
+    await expect(sentence(page)).toHaveText(coverageText(counts));
+    await expect(sentence(page)).toContainText(`Of ${formatCount(funds.length)} funds`);
+    for (const [key, text] of [
+      ["noMonthReturn", "no 1M return"],
+      ["noSharpe", "no Sharpe ratio"],
+      ["noRisk", "no risk level"],
+    ]) {
+      if (counts[key] > 0) await expect(sentence(page)).toContainText(new RegExp(`${formatCount(counts[key])} ha(s|ve) ${text}`));
+      else await expect(sentence(page)).not.toContainText(text);
+    }
+  });
+
+  test("the counts don't follow the view, the filters or the search", async ({ page }) => {
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previousData().previous }));
+    await open(page);
+    const expected = coverageText(coverage.counts);
+    const banner = priceWindowText(coverage.window);
+    await expect(sentence(page)).toHaveText(expected);
+    await page.locator('[data-view="all"]').click();
+    await page.locator("#type-filter").selectOption(umbrellas[0]);
+    await page.locator("#risk-filter").selectOption("6");
+    await expect(page.locator("#change-filter")).toBeVisible();
+    await page.locator("#change-filter").selectOption("entered");
+    await page.locator("#search").fill("zzz-no-such-fund");
+    await expect(page.locator("#empty")).toBeVisible();
+    await expect(sentence(page)).toHaveText(expected);
+    await expect(priceDates(page)).toHaveText(banner);
+  });
+
+  for (const [name, priceDatesValue] of [
+    ["missing", undefined],
+    ["not a list", "2026-10-30"],
+    ["malformed", ["2026-10-02", "30.10.2026"]],
+  ]) {
+    test(`says the price dates are unknown when they are ${name}`, async ({ page }) => {
+      const errors = collectErrors(page);
+      const copy = { ...data, priceDates: priceDatesValue };
+      if (priceDatesValue === undefined) delete copy.priceDates;
+      await page.route("**/data/funds.json", (route) => route.fulfill({ json: copy }));
+      await open(page);
+      await expect(priceDates(page)).toHaveText("Price dates unknown");
+      await expect(sentence(page)).toHaveText(coverageText(coverage.counts));
+      await expect(rows(page)).toHaveCount(passing.length);
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test("no text names a date for the period returns", async ({ page }) => {
+    await open(page);
+    const text = await page.locator("body").innerText();
+    expect(text).not.toMatch(/\bas of\b/i);
+    expect(text).not.toMatch(/returns? (on|at|from|to) \d/i);
+  });
+
+  test("are left out when the data fails to load", async ({ page }) => {
+    await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500 }));
+    await page.goto("./");
+    await expect(page.locator("#status")).toContainText("Could not load fund data");
+    await expect(priceDates(page)).toHaveText("");
+    await expect(sentence(page)).toBeHidden();
+  });
+
+  for (const width of [320, 1280]) {
+    test(`fit a ${width} px screen`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await open(page);
+      for (const locator of [priceDates(page), page.locator("#updated"), sentence(page)]) {
+        const box = await locator.boundingBox();
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    });
+  }
+
+  test("a window across a new year fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const copy = { ...data, priceDates: ["2025-12-15", ...data.priceDates.slice(1, -1), "2026-01-09"] };
+    await page.route("**/data/funds.json", (route) => route.fulfill({ json: copy }));
+    await open(page);
+    await expect(priceDates(page)).toHaveText(`Prices 15 Dec 2025 – 9 Jan 2026 (${copy.priceDates.length} days)`);
+    const box = await priceDates(page).boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
 test.describe("stale data warning", () => {
   const fetchedAt = new Date(data.fetchedAt).getTime();
 
@@ -550,7 +678,7 @@ test("reports a failed data request", async ({ page }) => {
 });
 
 test.describe("changes since the previous update", () => {
-  const { previous, changes, enteredCodes, leftCodes, goneCode } = previousData();
+  const { previous, changes, enteredCodes, leftCodes, goneCode, newCode } = previousData();
   const summary = (page) => page.locator("#changes");
   const badges = (page, text) => page.locator("#funds tbody td.col-code .badge", { hasText: text });
   // The codes of the rows with that badge, sorted as changes.js sorts them.
@@ -586,7 +714,7 @@ test.describe("changes since the previous update", () => {
   }
 
   test("the fixture has the changes it was built with", () => {
-    expect(changes.entered).toEqual(expect.arrayContaining(enteredCodes));
+    expect(changes.entered).toEqual(expect.arrayContaining([...enteredCodes, newCode]));
     expect(changes.left).toEqual(expect.arrayContaining([...leftCodes, goneCode]));
     expect(changes.gone).toEqual([goneCode]);
   });
@@ -1257,5 +1385,262 @@ test.describe("rule evidence row", () => {
     // The list doesn't scroll sideways inside itself either.
     expect(await list.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+
+  test.describe("for funds that entered or left the passing list", () => {
+    const { previous, changes, enteredCodes, leftCodes, newCode } = previousData();
+    const previousByCode = new Map(classifyFunds(previous.funds).map((f) => [f.code, f]));
+    const byCode = new Map(funds.map((f) => [f.code, f]));
+    const date = previousDate(previous.fetchedAt);
+    const collectErrors = (page) => {
+      const errors = [];
+      page.on("console", (msg) => {
+        if (msg.type() === "error") errors.push(msg.text());
+      });
+      page.on("pageerror", (error) => errors.push(error.message));
+      return errors;
+    };
+    const servePrevious = (page, json = previous) =>
+      page.route("**/data/previous.json", (route) => route.fulfill({ json }));
+
+    // Today's evidence, plus the previous update's value and outcome on every
+    // rule and CHANGED on exactly the rules whose outcome differs, as
+    // evidenceChanges works out against `before` (the previous file's fund).
+    async function expectComparison(page, code, before = previousByCode.get(code), label = `Before (${date})`) {
+      const fund = byCode.get(code);
+      await expectEvidence(page, fund);
+      const { inPrevious, rules } = evidenceChanges(fund, before);
+      expect(inPrevious).toBe(true);
+      const changed = rules.filter((r) => r.changed);
+      expect(changed.length).toBeGreaterThan(0);
+      await expect(evidence(page, code).locator(".evidence-note")).toHaveCount(0);
+      await expect(evidence(page, code).locator(".badge-changed")).toHaveCount(changed.length);
+      for (const [i, r] of rules.entries()) {
+        const item = items(page, code).nth(i);
+        await expect(item.locator(".evidence-previous")).toHaveText(
+          `${label}: ${r.previous.measured} · ${OUTCOME_TEXT[r.previous.outcome]}`,
+        );
+        await expect(item).toHaveAttribute("data-changed", String(r.changed));
+        await expect(item.locator(".badge-changed")).toHaveCount(r.changed ? 1 : 0);
+      }
+    }
+
+    // The evidence row as it is for every other fund: no previous values.
+    async function expectNoComparison(page, code) {
+      await expectEvidence(page, byCode.get(code));
+      await expect(evidence(page, code).locator(".evidence-previous")).toHaveCount(0);
+      await expect(evidence(page, code).locator(".badge-changed")).toHaveCount(0);
+      await expect(evidence(page, code).locator(".evidence-note")).toHaveCount(0);
+      await expect(evidence(page, code).locator("li[data-changed]")).toHaveCount(0);
+    }
+
+    test("the fixture has a fund that entered, one that left and one new to the data", () => {
+      expect(changes.entered).toEqual(expect.arrayContaining([enteredCodes[0], newCode]));
+      expect(changes.left).toEqual(expect.arrayContaining([leftCodes[0]]));
+      expect(previousByCode.has(newCode)).toBe(false);
+    });
+
+    test("a fund that entered shows the previous update's results and marks the rules that changed", async ({
+      page,
+    }) => {
+      const errors = collectErrors(page);
+      await servePrevious(page);
+      const code = enteredCodes[0];
+      await open(page, `?q=${encodeURIComponent(code)}`);
+      await expect(fundRow(page, code).locator(".badge-new")).toBeVisible();
+      await toggle(page, code).click();
+      await expectComparison(page, code);
+      // It entered because its 1M return was 0 before.
+      await expect(items(page, code).first()).toHaveAttribute("data-changed", "true");
+      await expect(items(page, code).first().locator(".evidence-previous")).toHaveText(
+        `Before (${date}): 1M 0.00% · Fail`,
+      );
+      expect(errors).toEqual([]);
+    });
+
+    test("a fund that left shows the previous update's results and marks the rules that changed", async ({
+      page,
+    }) => {
+      await servePrevious(page);
+      for (const code of leftCodes) {
+        await open(page, `?view=excluded&q=${encodeURIComponent(code)}`);
+        await expect(fundRow(page, code).locator(".badge-left")).toBeVisible();
+        await toggle(page, code).click();
+        await expectComparison(page, code);
+        // The rule in the Reason column passed before, since the fund passed every rule.
+        const reason = evidence(page, code).locator("li", { has: page.locator(".badge-reason") });
+        await expect(reason).toHaveAttribute("data-changed", "true");
+        await expect(reason.locator(".badge-changed")).toHaveText("CHANGED");
+      }
+    });
+
+    test("a fund new to the data says so once, with no previous values", async ({ page }) => {
+      await servePrevious(page);
+      await open(page, `?q=${encodeURIComponent(newCode)}`);
+      await expect(fundRow(page, newCode).locator(".badge-new")).toBeVisible();
+      await toggle(page, newCode).click();
+      await expectEvidence(page, byCode.get(newCode));
+      const note = evidence(page, newCode).locator(".evidence-note");
+      await expect(note).toHaveCount(1);
+      await expect(note).toHaveText(
+        `Not in the previous update's data (${date}): this fund entered the passing list by appearing in the ` +
+          "data, not by crossing a rule's threshold.",
+      );
+      // Above the list.
+      expect(await note.evaluate((el) => el.nextElementSibling?.tagName)).toBe("OL");
+      await expect(evidence(page, newCode).locator(".evidence-previous")).toHaveCount(0);
+      await expect(evidence(page, newCode).locator(".badge-changed")).toHaveCount(0);
+    });
+
+    test("a fund that didn't enter or leave shows today's results only", async ({ page }) => {
+      await servePrevious(page);
+      const changed = new Set([...changes.entered, ...changes.left]);
+      const fund = funds.find((f) => !changed.has(f.code) && !f.reason);
+      const other = funds.find((f) => !changed.has(f.code) && f.reason);
+      await open(page, "?view=all");
+      // Waits for the changes, so the row would have the previous values if it had any.
+      await expect(page.locator("#changes")).toBeVisible();
+      for (const f of [fund, other]) {
+        await page.locator("#search").fill(f.code);
+        await toggle(page, f.code).click();
+        await expectNoComparison(page, f.code);
+      }
+    });
+
+    test("works from the keyboard", async ({ page }) => {
+      await servePrevious(page);
+      const code = enteredCodes[0];
+      await open(page, `?q=${encodeURIComponent(code)}`);
+      await expect(page.locator("#changes")).toBeVisible();
+      await toggle(page, code).focus();
+      await page.keyboard.press("Enter");
+      await expect(toggle(page, code)).toHaveAttribute("aria-expanded", "true");
+      await expectComparison(page, code);
+      // The CHANGED badges are text, so screen readers read them with the rule.
+      await expect(items(page, code).first()).toContainText("CHANGED");
+      await page.keyboard.press("Space");
+      await expect(evidence(page, code)).toHaveCount(0);
+    });
+
+    test("says 'previous update' when the previous update's time is missing or invalid", async ({ page }) => {
+      const code = enteredCodes[0];
+      for (const fetchedAt of [undefined, "not a date"]) {
+        await page.unrouteAll();
+        await servePrevious(page, { ...previous, fetchedAt });
+        await open(page, `?q=${encodeURIComponent(code)}`);
+        await expect(page.locator("#changes")).toBeVisible();
+        await toggle(page, code).click();
+        await expectComparison(page, code, previousByCode.get(code), "Before (previous update)");
+
+        await page.locator("#search").fill(newCode);
+        await toggle(page, newCode).click();
+        await expect(evidence(page, newCode).locator(".evidence-note")).toHaveText(
+          "Not in the previous update's data: this fund entered the passing list by appearing in the data, " +
+            "not by crossing a rule's threshold.",
+        );
+      }
+    });
+
+    test("a row opened before the previous update loads gets its previous values when it does", async ({
+      page,
+    }) => {
+      let release;
+      const released = new Promise((resolve) => {
+        release = resolve;
+      });
+      await page.route("**/data/previous.json", async (route) => {
+        await released;
+        await route.fulfill({ json: previous });
+      });
+      const [code] = enteredCodes;
+      await open(page);
+      for (const c of [code, newCode]) {
+        await page.locator("#search").fill(c);
+        await toggle(page, c).click();
+        await expectNoComparison(page, c);
+      }
+
+      release();
+      await expect(page.locator("#changes")).toBeVisible();
+      await expect(evidence(page, newCode).locator(".evidence-note")).toHaveCount(1);
+      await page.locator("#search").fill(code);
+      await expect(toggle(page, code)).toHaveAttribute("aria-expanded", "true");
+      await expectComparison(page, code);
+    });
+
+    test("without a usable previous update the rows are unchanged, without errors", async ({ page }) => {
+      for (const response of [
+        { status: 404, body: "" },
+        { contentType: "application/json", body: "not json" },
+        { contentType: "application/json", body: '{"funds": 5}' },
+      ]) {
+        const label = `${response.status ?? 200} ${response.body}`;
+        const errors = collectErrors(page);
+        let requested = false;
+        await page.unrouteAll();
+        await page.route("**/data/previous.json", (route) => {
+          requested = true;
+          return route.fulfill(response);
+        });
+        await open(page, "?view=all");
+        await expect.poll(() => requested, label).toBe(true);
+        await page.waitForLoadState("networkidle");
+        for (const code of [enteredCodes[0], leftCodes[0], newCode]) {
+          await page.locator("#search").fill(code);
+          await toggle(page, code).click();
+          await expectNoComparison(page, code);
+        }
+        expect(errors.filter((text) => !text.startsWith("Failed to load resource")), label).toEqual([]);
+      }
+    });
+
+    test("fits a 320 px screen", async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 640 });
+      await servePrevious(page);
+      for (const [view, code] of [
+        ["excluded", leftCodes[0]],
+        ["passing", newCode],
+      ]) {
+        await open(page, `?view=${view}&q=${encodeURIComponent(code)}`);
+        await expect(page.locator("#changes")).toBeVisible();
+        await toggle(page, code).click();
+        const parts = [
+          evidence(page, code).locator("ol"),
+          ...(await items(page, code).all()),
+          ...(await evidence(page, code).locator(".evidence-note, .evidence-previous").all()),
+        ];
+        for (const part of parts) {
+          const box = await part.boundingBox();
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(320);
+          expect(await part.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      }
+    });
+
+    test("match the committed previous update", async ({ page }) => {
+      test.skip(!committedPrevious, "no data/previous.json committed yet");
+      const committedFunds = new Map(classifyFunds(committedPrevious.funds).map((f) => [f.code, f]));
+      const committed = membershipChanges(funds, [...committedFunds.values()]);
+      const listed = [...committed.entered, ...committed.left.filter((code) => !committed.gone.includes(code))];
+      test.skip(listed.length === 0, "no fund entered or left in the committed data");
+      const label = previousDate(committedPrevious.fetchedAt);
+      await open(page, "?view=all");
+      await expect(page.locator("#changes")).toBeVisible();
+      // A few of them keep the run short.
+      for (const code of listed.slice(0, 4)) {
+        await page.locator("#search").fill(code);
+        await toggle(page, code).click();
+        const before = committedFunds.get(code);
+        if (before) {
+          await expectComparison(page, code, before, label ? `Before (${label})` : "Before (previous update)");
+        } else {
+          await expect(evidence(page, code).locator(".evidence-note")).toHaveCount(1);
+          await expect(evidence(page, code).locator(".evidence-previous")).toHaveCount(0);
+        }
+        await toggle(page, code).click();
+      }
+    });
   });
 });
