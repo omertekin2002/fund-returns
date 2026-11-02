@@ -519,6 +519,34 @@ th button[data-dir="desc"]::after {
   background: var(--yellow-sticker);
 }
 
+/* On a rule whose outcome differs from the previous update's, for funds that
+   entered or left the passing list. Inverted, like an open Rules toggle, so it
+   doesn't read as one of the rule tints. */
+.badge-changed {
+  background: var(--frame-ink);
+  color: var(--on-primary);
+}
+
+/* The previous update's value and outcome under today's, set apart by a
+   hairline so the two read as now and before. */
+.evidence-previous {
+  margin-top: var(--space-xs);
+  padding-top: var(--space-xs);
+  border-top: var(--hairline);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Once above the rules, for a fund that entered by appearing in the data. It
+   keeps to the visible width of the table, like the list under it. */
+.evidence-note {
+  position: sticky;
+  left: 0;
+  max-width: 100cqi;
+  padding: var(--space-md) var(--space-md) 0;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 /* The 4-week price line: a black stroke on the white row, no fill (DESIGN.md:
    flat, ink on canvas). The table-wrap scrolls it into view on phones. */
 td.col-sparkline {
@@ -600,6 +628,12 @@ td.col-sparkline {
   .tagline,
   .callout {
     font-size: 14px;
+  }
+
+  /* A long price window (e.g. across a new year) wraps instead of running
+     off a 320px screen. */
+  .callout {
+    white-space: normal;
   }
 
   /* 44px touch targets on phones. */

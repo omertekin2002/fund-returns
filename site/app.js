@@ -1,5 +1,6 @@
-import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes.js";
+import { changesSummaryParts, classifyFunds, evidenceChanges, membershipChanges, previousDate } from "./changes.js";
 import { COLUMNS, columnsFor } from "./columns.js";
+import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { RULES, ruleEvidence } from "./filter.js";
 import { isStale } from "./freshness.js";
@@ -15,6 +16,11 @@ const state = {
   // previous update; empty until data/previous.json has loaded.
   entered: new Set(),
   left: new Set(),
+  // The previous update's classified funds by code, and its fetch time (ISO),
+  // for the evidence rows of the funds that entered or left; empty until
+  // data/previous.json has loaded.
+  previous: new Map(),
+  previousFetchedAt: null,
   // Whether those changes have loaded. Until then a change filter from the
   // URL (state.changed) is kept but not applied, and its select is hidden.
   changesLoaded: false,
@@ -28,6 +34,8 @@ const els = {
   status: document.getElementById("status"),
   sticker: document.getElementById("pass-sticker"),
   updated: document.getElementById("updated"),
+  priceDates: document.getElementById("price-dates"),
+  coverage: document.getElementById("coverage"),
   stale: document.getElementById("stale"),
   changes: document.getElementById("changes"),
   rules: document.getElementById("rules"),
@@ -198,8 +206,17 @@ const OUTCOME_TEXT = { pass: "Pass", fail: "Fail", "missing-allowed": "Missing, 
 // The id of a fund's evidence row, for the toggle's aria-controls.
 const evidenceId = (code) => `evidence-${code.replace(/[^\w-]/g, "_")}`;
 
+// For a fund that entered or left the passing list, how its result on each
+// rule compares with the previous update (see evidenceChanges); otherwise null.
+function evidenceComparison(fund) {
+  if (!state.entered.has(fund.code) && !state.left.has(fund.code)) return null;
+  return evidenceChanges(fund, state.previous.get(fund.code));
+}
+
 // The row under a fund's row that shows how the fund fares on each of the six
-// rules, spanning the table's `span` columns.
+// rules, spanning the table's `span` columns. For a fund that entered or left
+// the passing list, each rule also shows the previous update's result, and
+// the rules whose outcome changed are marked.
 function evidenceRow(fund, span) {
   const tr = document.createElement("tr");
   tr.className = "evidence-row";
@@ -212,8 +229,12 @@ function evidenceRow(fund, span) {
   const entries = ruleEvidence(fund);
   // The first failure is the one the Reason column shows.
   const reason = entries.find((e) => e.outcome === "fail");
+  const comparison = evidenceComparison(fund);
+  const date = previousDate(state.previousFetchedAt);
+  const before = date ? `Before (${date})` : "Before (previous update)";
   list.append(
-    ...entries.map((entry) => {
+    ...entries.map((entry, i) => {
+      const compared = comparison?.rules[i];
       const index = RULES.findIndex((r) => r.id === entry.rule);
       const li = document.createElement("li");
       li.className = `evidence-item evidence-${entry.outcome}`;
@@ -228,6 +249,7 @@ function evidenceRow(fund, span) {
       outcome.textContent = OUTCOME_TEXT[entry.outcome];
       const verdict = document.createElement("span");
       verdict.className = "evidence-verdict";
+      if (compared?.changed) verdict.append(badge("CHANGED", "The outcome differs from the previous update"), " ");
       if (entry === reason) verdict.append(badge("REASON", "The rule shown in the Reason column"), " ");
       verdict.append(outcome);
       head.append(title, " ", verdict);
@@ -241,10 +263,26 @@ function evidenceRow(fund, span) {
       requirement.className = "evidence-requirement";
       requirement.textContent = `Needs: ${entry.requirement}`;
       body.append(measured, requirement);
+      if (compared?.previous) {
+        const previous = document.createElement("p");
+        previous.className = "evidence-previous";
+        previous.textContent = `${before}: ${compared.previous.measured} · ${OUTCOME_TEXT[compared.previous.outcome]}`;
+        body.append(previous);
+      }
+      if (compared) li.dataset.changed = String(compared.changed);
       li.append(head, body);
       return li;
     }),
   );
+  // A fund that entered by appearing in the data has no previous values.
+  if (comparison && !comparison.inPrevious) {
+    const note = document.createElement("p");
+    note.className = "evidence-note";
+    note.textContent =
+      `Not in the previous update's data${date ? ` (${date})` : ""}: this fund entered the passing list by ` +
+      "appearing in the data, not by crossing a rule's threshold.";
+    td.append(note);
+  }
   td.append(list);
   tr.append(td);
   return tr;
@@ -464,6 +502,12 @@ async function init() {
     const stale = isStale(data.fetchedAt);
     els.updated.textContent = fetchedAt ? `Updated ${fetchedAt}` : "Update time unknown";
     els.updated.title = "Istanbul time";
+    // Counted over every fund, so they don't follow the view, filters or search.
+    const coverage = dataCoverage(data, state.funds);
+    els.priceDates.textContent = priceWindowText(coverage.window);
+    els.priceDates.title = "The first and last day with TEFAS prices in the data";
+    els.coverage.textContent = coverageText(coverage.counts);
+    els.coverage.hidden = false;
     els.status.textContent =
       `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against six rules. " +
@@ -513,13 +557,15 @@ function changeLink({ text, changed }) {
 // the URL is dropped.
 async function loadChanges() {
   let changes;
+  let previousFunds;
   let previousFetchedAt;
   try {
     const response = await fetch("data/previous.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const previous = await response.json();
     if (!Array.isArray(previous?.funds)) throw new Error("no funds");
-    changes = membershipChanges(state.funds, classifyFunds(previous.funds));
+    previousFunds = classifyFunds(previous.funds);
+    changes = membershipChanges(state.funds, previousFunds);
     previousFetchedAt = previous.fetchedAt;
   } catch {
     if (state.changed) {
@@ -530,6 +576,8 @@ async function loadChanges() {
   }
   state.entered = new Set(changes.entered);
   state.left = new Set(changes.left);
+  state.previous = new Map(previousFunds.map((f) => [f.code, f]));
+  state.previousFetchedAt = previousFetchedAt;
   state.changesLoaded = true;
   // Built from text nodes and links, never from HTML.
   els.changes.replaceChildren(
