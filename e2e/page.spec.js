@@ -1261,6 +1261,8 @@ test.describe("rule evidence row", () => {
 
   test("a passing fund's evidence shows all six rules with no failure", async ({ page }) => {
     const fund = passing[0];
+    // It failed previously: historical outcomes must not count as today's failures.
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previousData().previous }));
     await open(page, `?q=${encodeURIComponent(fund.code)}`);
     await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "false");
     await expect(toggle(page, fund.code)).toHaveAttribute("aria-controls", `evidence-${fund.code}`);
@@ -1270,7 +1272,8 @@ test.describe("rule evidence row", () => {
     await expect(toggle(page, fund.code)).toHaveAttribute("aria-expanded", "true");
     await expect(evidence(page, fund.code)).toBeVisible();
     await expectEvidence(page, fund);
-    await expect(items(page, fund.code).filter({ hasText: "Fail" })).toHaveCount(0);
+    await expect(evidence(page, fund.code).locator(".evidence-previous").filter({ hasText: "· Fail" })).not.toHaveCount(0);
+    await expect(evidence(page, fund.code).locator(".evidence-outcome").filter({ hasText: /^Fail$/ })).toHaveCount(0);
     await expect(evidence(page, fund.code).locator(".badge-reason")).toHaveCount(0);
     // The evidence row sits right under the fund's row and spans every column.
     const colspan = await evidence(page, fund.code).locator("td").getAttribute("colspan");
