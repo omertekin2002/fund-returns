@@ -38,8 +38,14 @@ const funds = (n) => `${countFormat.format(n)} ${n === 1 ? "fund" : "funds"}`;
 // timestamp) in Istanbul time, e.g. "27 Oct 2026", or null when the time is
 // missing or invalid.
 export function previousDate(previousFetchedAt) {
+  const day = typeof previousFetchedAt === "string" && /^(\d{4}-\d{2}-\d{2})T/.exec(previousFetchedAt)?.[1];
+  if (!day) return null;
+  // Date parsing normalizes impossible days (e.g. 30 February); reject them
+  // before converting the timestamp to Istanbul time, which can change its day.
+  const calendarDate = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(calendarDate.getTime()) || calendarDate.toISOString().slice(0, 10) !== day) return null;
   const date = new Date(previousFetchedAt);
-  if (typeof previousFetchedAt !== "string" || Number.isNaN(date.getTime())) return null;
+  if (Number.isNaN(date.getTime())) return null;
   return dateFormat.format(date);
 }
 

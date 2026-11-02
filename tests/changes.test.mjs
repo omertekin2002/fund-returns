@@ -151,7 +151,7 @@ test("the summary counts the funds gone from the data apart, and lists them by c
 });
 
 test("the summary works without a valid previous update time", () => {
-  for (const at of [undefined, null, "not a date", 5]) {
+  for (const at of [undefined, null, "not a date", 5, "2026-02-30T07:15:00Z"]) {
     assert.equal(
       changesSummary({ entered: [], left: ["D"], gone: [] }, at),
       "Since the previous update: 1 fund left the passing list.",
@@ -191,6 +191,14 @@ test("previousDate is the previous update's day in Istanbul time, or null", () =
   assert.equal(previousDate("2026-10-26T22:30:00Z"), "27 Oct 2026");
   assert.equal(previousDate("2026-10-29T07:15:00Z"), "29 Oct 2026");
   for (const at of [undefined, null, "", "not a date", 5]) assert.equal(previousDate(at), null);
+});
+
+test("previousDate rejects impossible calendar dates without rejecting leap days or offset day changes", () => {
+  for (const at of ["2026-02-30T07:15:00Z", "2026-02-30T07:15:00+03:00", "2025-02-29T07:15:00Z", "2026-04-31T07:15:00Z"]) {
+    assert.equal(previousDate(at), null, at);
+  }
+  assert.equal(previousDate("2024-02-29T07:15:00Z"), "29 Feb 2024");
+  assert.equal(previousDate("2024-02-29T23:30:00-03:00"), "1 Mar 2024");
 });
 
 // evidenceChanges for one fund classified in a current and a previous list,
