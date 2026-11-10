@@ -1,8 +1,8 @@
-import { changesSummaryParts, classifyFunds, evidenceChanges, membershipChanges, previousDate } from "./changes.js";
+import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes.js";
 import { COLUMNS, columnsFor } from "./columns.js";
 import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
-import { RULES, ruleEvidence } from "./filter.js";
+import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
 import { HEIGHT, polylinePoints, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
@@ -16,17 +16,9 @@ const state = {
   // previous update; empty until data/previous.json has loaded.
   entered: new Set(),
   left: new Set(),
-  // The previous update's classified funds by code, and its fetch time (ISO),
-  // for the evidence rows of the funds that entered or left; empty until
-  // data/previous.json has loaded.
-  previous: new Map(),
-  previousFetchedAt: null,
   // Whether those changes have loaded. Until then a change filter from the
   // URL (state.changed) is kept but not applied, and its select is hidden.
   changesLoaded: false,
-  // Codes of the funds whose rule evidence row is open. Kept while the page
-  // is open (not in the URL), so open rows stay open after a sort or search.
-  openEvidence: new Set(),
   ...parseState(location.search),
 };
 
@@ -201,129 +193,16 @@ function sparklineSvg(trend) {
   return svg;
 }
 
-const OUTCOME_TEXT = { pass: "Pass", fail: "Fail", "missing-allowed": "Missing, allowed" };
-
-// The id of a fund's evidence row, for the toggle's aria-controls.
-const evidenceId = (code) => `evidence-${code.replace(/[^\w-]/g, "_")}`;
-
-// For a fund that entered or left the passing list, how its result on each
-// rule compares with the previous update (see evidenceChanges); otherwise null.
-function evidenceComparison(fund) {
-  if (!state.entered.has(fund.code) && !state.left.has(fund.code)) return null;
-  return evidenceChanges(fund, state.previous.get(fund.code));
-}
-
-// The row under a fund's row that shows how the fund fares on each of the six
-// rules, spanning the table's `span` columns. For a fund that entered or left
-// the passing list, each rule also shows the previous update's result, and
-// the rules whose outcome changed are marked.
-function evidenceRow(fund, span) {
-  const tr = document.createElement("tr");
-  tr.className = "evidence-row";
-  tr.id = evidenceId(fund.code);
-  const td = document.createElement("td");
-  td.colSpan = span;
-  const list = document.createElement("ol");
-  list.className = "evidence";
-  list.setAttribute("aria-label", `How ${fund.code} fares on each rule`);
-  const entries = ruleEvidence(fund);
-  // The first failure is the one the Reason column shows.
-  const reason = entries.find((e) => e.outcome === "fail");
-  const comparison = evidenceComparison(fund);
-  const date = previousDate(state.previousFetchedAt);
-  const before = date ? `Before (${date})` : "Before (previous update)";
-  list.append(
-    ...entries.map((entry, i) => {
-      const compared = comparison?.rules[i];
-      const index = RULES.findIndex((r) => r.id === entry.rule);
-      const li = document.createElement("li");
-      li.className = `evidence-item evidence-${entry.outcome}`;
-      li.dataset.rule = entry.rule;
-      li.dataset.outcome = entry.outcome;
-      const head = document.createElement("div");
-      head.className = "evidence-title";
-      const title = document.createElement("span");
-      title.textContent = `Rule ${index + 1} · ${RULES[index].title}`;
-      const outcome = document.createElement("strong");
-      outcome.className = "evidence-outcome";
-      outcome.textContent = OUTCOME_TEXT[entry.outcome];
-      const verdict = document.createElement("span");
-      verdict.className = "evidence-verdict";
-      if (compared?.changed) verdict.append(badge("CHANGED", "The outcome differs from the previous update"), " ");
-      if (entry === reason) verdict.append(badge("REASON", "The rule shown in the Reason column"), " ");
-      verdict.append(outcome);
-      head.append(title, " ", verdict);
-      const body = document.createElement("div");
-      // Failures are tinted with the colour of the rule's card above the table.
-      body.className = entry.outcome === "fail" ? `evidence-body rule-${entry.rule}` : "evidence-body";
-      const measured = document.createElement("p");
-      measured.className = "evidence-measured";
-      measured.textContent = entry.measured;
-      const requirement = document.createElement("p");
-      requirement.className = "evidence-requirement";
-      requirement.textContent = `Needs: ${entry.requirement}`;
-      body.append(measured, requirement);
-      if (compared?.previous) {
-        const previous = document.createElement("p");
-        previous.className = "evidence-previous";
-        previous.textContent = `${before}: ${compared.previous.measured} · ${OUTCOME_TEXT[compared.previous.outcome]}`;
-        body.append(previous);
-      }
-      if (compared) li.dataset.changed = String(compared.changed);
-      li.append(head, body);
-      return li;
-    }),
-  );
-  // A fund that entered by appearing in the data has no previous values.
-  if (comparison && !comparison.inPrevious) {
-    const note = document.createElement("p");
-    note.className = "evidence-note";
-    note.textContent =
-      `Not in the previous update's data${date ? ` (${date})` : ""}: this fund entered the passing list by ` +
-      "appearing in the data, not by crossing a rule's threshold.";
-    td.append(note);
-  }
-  td.append(list);
-  tr.append(td);
-  return tr;
-}
-
-// The button that opens and closes a fund's evidence row.
-function evidenceToggle(fund) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "evidence-toggle";
-  button.textContent = "Rules";
-  button.setAttribute("aria-label", `Rules for ${fund.code}`);
-  button.setAttribute("aria-controls", evidenceId(fund.code));
-  button.setAttribute("aria-expanded", String(state.openEvidence.has(fund.code)));
-  // Adds or removes just this row, so the rest of the table and the focus stay put.
-  button.addEventListener("click", () => {
-    const row = button.closest("tr");
-    if (state.openEvidence.has(fund.code)) {
-      state.openEvidence.delete(fund.code);
-      document.getElementById(evidenceId(fund.code))?.remove();
-      button.setAttribute("aria-expanded", "false");
-    } else {
-      state.openEvidence.add(fund.code);
-      row.after(evidenceRow(fund, row.cells.length));
-      button.setAttribute("aria-expanded", "true");
-    }
-  });
-  return button;
-}
-
 function renderBody() {
   const columns = visibleColumns();
   const funds = selectedFunds();
-  const rows = funds.flatMap((fund) => {
+  const rows = funds.map((fund) => {
     const tr = document.createElement("tr");
     for (const col of columns) {
       const td = document.createElement("td");
       td.className = `col-${col.type} col-${col.key}`;
       const value = col.value(fund);
       if (col.key === "code") {
-        td.append(evidenceToggle(fund), " ");
         const link = document.createElement("a");
         link.href = `https://www.tefas.gov.tr/tr/fon-detayli-analiz/${encodeURIComponent(fund.code)}`;
         link.target = "_blank";
@@ -354,7 +233,7 @@ function renderBody() {
       }
       tr.append(td);
     }
-    return state.openEvidence.has(fund.code) ? [tr, evidenceRow(fund, columns.length)] : [tr];
+    return tr;
   });
   els.body.replaceChildren(...rows);
   els.empty.hidden = funds.length > 0;
@@ -557,15 +436,13 @@ function changeLink({ text, changed }) {
 // the URL is dropped.
 async function loadChanges() {
   let changes;
-  let previousFunds;
   let previousFetchedAt;
   try {
     const response = await fetch("data/previous.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const previous = await response.json();
     if (!Array.isArray(previous?.funds)) throw new Error("no funds");
-    previousFunds = classifyFunds(previous.funds);
-    changes = membershipChanges(state.funds, previousFunds);
+    changes = membershipChanges(state.funds, classifyFunds(previous.funds));
     previousFetchedAt = previous.fetchedAt;
   } catch {
     if (state.changed) {
@@ -576,8 +453,6 @@ async function loadChanges() {
   }
   state.entered = new Set(changes.entered);
   state.left = new Set(changes.left);
-  state.previous = new Map(previousFunds.map((f) => [f.code, f]));
-  state.previousFetchedAt = previousFetchedAt;
   state.changesLoaded = true;
   // Built from text nodes and links, never from HTML.
   els.changes.replaceChildren(

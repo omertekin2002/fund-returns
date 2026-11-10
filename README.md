@@ -37,33 +37,6 @@ A fund is shown only if it breaks none of these rules:
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
 
-### Rule evidence
-
-The Reason column shows only the first rule a fund breaks. The **Rules** button
-before each fund code opens a row under the fund with its result on all six
-rules: the fund's value (e.g. `3M 12.40%`, or `No 1Y return`), what the rule
-needs, and one of three outcomes:
-
-- **Pass:** the value meets the rule.
-- **Fail:** the value breaks the rule. Failures are tinted like the rule's
-  card, and the first one, which the Reason column shows, is marked `REASON`.
-- **Missing, allowed:** the value is absent and the rule allows that (a missing
-  3M, 6M or 1Y return, no Sharpe ratio, or fewer than two returns for the
-  longer-beats-shorter rule). A missing 1M return is a failure.
-
-The evidence comes from `ruleEvidence` in `filter.js`, and the Reason column's
-rule is its first failure, so the two always agree. Open rows stay open while
-you sort, search or filter, but aren't kept in the URL.
-
-For a fund marked `NEW` or `LEFT` (see
-[Changes since the last update](#changes-since-the-last-update)), each rule
-also shows the previous update's value and outcome, e.g.
-`Before (29 Oct 2026): 1M 3.40% · Pass`, so you can see which value moved the
-fund across the line. Rules whose outcome differs between the two updates are
-marked `CHANGED`. A fund that entered because it wasn't in the previous
-update's data says so once above the rules, with no previous values, since it
-didn't cross a threshold. Other funds' rows show today's results only.
-
 ## Changes since the last update
 
 Under the banner, the page says how many funds entered or left the passing
@@ -85,11 +58,7 @@ longer in the data: OLD.".
   and risk-free return), in [`site/changes.js`](site/changes.js). A fund
   entered if it passes now and didn't pass before (or wasn't in the previous
   data); it left if it passed before and doesn't pass now (or is no longer in
-  the data). The same previous results fill in the `Before` lines of those
-  funds' [rule evidence](#rule-evidence) (`evidenceChanges` in `changes.js`),
-  dated with the previous update's day in Istanbul time ("previous update"
-  when its time is missing). A row opened before `previous.json` has loaded
-  gets them once it loads.
+  the data).
 - The change filter next to the type and risk filters narrows the table to
   the funds that entered (**Entered the passing list**) or left (**Left the
   passing list**) since the previous update, and combines with the other
@@ -281,8 +250,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
-ratio, price line, data freshness, coverage, URL state, changes (including
-the previous results of a changed fund's rules) and CSV tests
+ratio, price line, data freshness, coverage, URL state, changes and CSV tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
@@ -322,15 +290,4 @@ kept in and restored from the URL, and are dropped from the URL when
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
-wide; and that the rule evidence row shows six rules matching `ruleEvidence`
-(no failure for a passing fund, the Reason column's rule as the first failure
-for an excluded one, rule 6 as missing but allowed without a Sharpe ratio),
-opens and closes from the keyboard with `aria-expanded` following, stays open
-after a sort, search or view change, and fits a 320 px screen; and that for
-funds that entered or left it also shows the previous update's value and
-outcome on every rule and marks exactly the rules whose outcome changed (as
-`evidenceChanges` works out from the fixture and from the committed
-`previous.json`), says once that a fund new to the data wasn't in it, leaves
-other funds' rows as they were, fills in a row opened before `previous.json`
-loads, is left out without errors when `previous.json` is missing or broken,
-and fits a 320 px screen.
+wide.
