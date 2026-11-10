@@ -1,7 +1,16 @@
 // Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { HEIGHT, PADDING, WIDTH, polylinePoints, sparkline, sparklineLabel } from "../site/sparkline.js";
+import {
+  HEIGHT,
+  PADDING,
+  WIDTH,
+  polylinePoints,
+  recentCount,
+  recentPrices,
+  sparkline,
+  sparklineLabel,
+} from "../site/sparkline.js";
 
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
 const LEFT = PADDING;
@@ -108,4 +117,25 @@ test("the label says up, down or unchanged with the change in percent", () => {
   // Rounds to 0.00%.
   assert.equal(sparklineLabel(0.00004), "Price over 4 weeks: unchanged");
   assert.equal(sparklineLabel(-0.00004), "Price over 4 weeks: unchanged");
+});
+
+test("recentCount counts the price dates in the four weeks up to the last one", () => {
+  const dates = ["2026-09-01", "2026-10-12", "2026-10-13", "2026-10-30", "2026-11-10"];
+  // 13 Oct is 28 days before 10 Nov; 12 Oct is one day too early.
+  assert.equal(recentCount(dates), 3);
+  assert.equal(recentCount(["2026-11-09", "2026-11-10"]), 2);
+  assert.equal(recentCount(["2026-11-10"]), 1);
+});
+
+test("recentCount is 0 without a list of valid dates", () => {
+  for (const dates of [undefined, null, [], "2026-11-10", ["2026-11-10", "soon"], [5]]) {
+    assert.equal(recentCount(dates), 0);
+  }
+});
+
+test("recentPrices keeps the last prices, or all of them when the count is 0", () => {
+  assert.deepEqual(recentPrices([1, 2, null, 4], 2), [null, 4]);
+  assert.deepEqual(recentPrices([1, 2], 5), [1, 2]);
+  assert.deepEqual(recentPrices([1, 2], 0), [1, 2]);
+  assert.equal(recentPrices(undefined, 3), undefined);
 });

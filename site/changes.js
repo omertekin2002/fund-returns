@@ -4,7 +4,7 @@
 import { exclusionReason } from "./filter.js";
 import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
 
-// Adds each fund's 4-week Sharpe ratio and its exclusion reason (null if it
+// Adds each fund's 6-month Sharpe ratio and its exclusion reason (null if it
 // passes every rule) to the funds of a data file.
 export function classifyFunds(funds) {
   const riskFree = riskFreeReturns(funds);

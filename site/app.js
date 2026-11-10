@@ -4,7 +4,7 @@ import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
-import { HEIGHT, polylinePoints, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
+import { HEIGHT, polylinePoints, recentCount, recentPrices, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
 // View, sort, search and filters start from the page URL, so links can be shared.
@@ -309,10 +309,10 @@ function render() {
   updateUrl();
 }
 
-// The fund's price line ready to draw ({ points, label }), or null with fewer
-// than two prices.
+// The fund's price line over the file's last `days` price dates, ready to draw
+// ({ points, label }), or null with fewer than two prices in them.
 function trendOf(prices, days) {
-  const line = sparkline(prices, days);
+  const line = sparkline(recentPrices(prices, days), days);
   if (!line) return null;
   return { points: line.segments.map(polylinePoints), label: sparklineLabel(line.change) };
 }
@@ -352,7 +352,7 @@ async function init() {
     const response = await fetch("data/funds.json", { cache: "no-cache" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
-    const days = Array.isArray(data.priceDates) ? data.priceDates.length : 0;
+    const days = recentCount(data.priceDates);
     state.fetchedAt = data.fetchedAt;
     state.funds = classifyFunds(data.funds).map((fund) => ({
       ...fund,

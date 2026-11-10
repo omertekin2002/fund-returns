@@ -69,6 +69,11 @@ def prices_response(codes=CODES, dates=DATES):
     return {"resultList": [price_row(code, day) for day in dates for code in codes]}
 
 
+def parse_prices(raw, codes):
+    """parse_prices() for a window that one response covers."""
+    return fetch_funds.parse_prices([raw], codes)
+
+
 def codes_of(funds):
     return [fund["code"] for fund in funds]
 
@@ -173,7 +178,7 @@ class ParsePricesTest(unittest.TestCase):
             price_row("AAA", "2026-10-01", 1.2),
             price_row("CCC", "2026-10-02", 3.3),
         ]
-        dates, prices = fetch_funds.parse_prices(
+        dates, prices = parse_prices(
             {"resultList": rows}, ["AAA", "BBB", "CCC", "DDD"]
         )
         self.assertEqual(dates, ["2026-09-30", "2026-10-01", "2026-10-02"])
@@ -194,18 +199,18 @@ class ParsePricesTest(unittest.TestCase):
         raw["resultList"][1]["fiyat"] = ""
         raw["resultList"][2]["fiyat"] = None
         raw["resultList"][3]["fiyat"] = "2.25"
-        _, prices = fetch_funds.parse_prices(raw, CODES)
+        _, prices = parse_prices(raw, CODES)
         self.assertEqual(prices["AAA"], [None, 2.25, 1.5])
         self.assertEqual(prices["BBB"], [None, 1.5, 1.5])
         self.assertEqual(prices["CCC"], [None, 1.5, 1.5])
 
     def test_ignores_codes_not_in_the_fund_list(self):
         raw = prices_response(CODES + ["ZZZ"])
-        _, prices = fetch_funds.parse_prices(raw, CODES)
+        _, prices = parse_prices(raw, CODES)
         self.assertEqual(sorted(prices), CODES)
         # Nor do they count as priced funds.
         with self.assertRaisesRegex(ValueError, "Prices for only 2 funds"):
-            fetch_funds.parse_prices(raw, CODES[:2] + ["DDD"])
+            parse_prices(raw, CODES[:2] + ["DDD"])
 
     def test_rejects_a_list_that_may_be_cut_off(self):
         codes = CODES + ["DDD"]
@@ -213,26 +218,26 @@ class ParsePricesTest(unittest.TestCase):
         raw = prices_response(codes, dates)
         self.assertEqual(len(raw["resultList"]), MAX_ROWS)
         with self.assertRaisesRegex(ValueError, "may be cut off"):
-            fetch_funds.parse_prices(raw, codes)
+            parse_prices(raw, codes)
         raw["resultList"].pop()
-        fetch_funds.parse_prices(raw, codes)
+        parse_prices(raw, codes)
 
     def test_rejects_too_few_dates(self):
-        dates, _ = fetch_funds.parse_prices(prices_response(), CODES)
+        dates, _ = parse_prices(prices_response(), CODES)
         self.assertEqual(len(dates), MIN_DATES)
         with self.assertRaisesRegex(ValueError, "only 2 dates"):
-            fetch_funds.parse_prices(prices_response(dates=DATES[:2]), CODES)
+            parse_prices(prices_response(dates=DATES[:2]), CODES)
 
     def test_rejects_too_few_priced_funds(self):
         with self.assertRaisesRegex(ValueError, "Prices for only 2 funds"):
-            fetch_funds.parse_prices(prices_response(CODES[:2]), CODES)
+            parse_prices(prices_response(CODES[:2]), CODES)
         # A fund whose prices are all missing doesn't count.
         raw = prices_response()
         for row in raw["resultList"]:
             if row["fonKodu"] == "CCC":
                 row["fiyat"] = 0
         with self.assertRaisesRegex(ValueError, "Prices for only 2 funds"):
-            fetch_funds.parse_prices(raw, CODES)
+            parse_prices(raw, CODES)
 
     def test_rejects_a_row_missing_a_field(self):
         for field in fetch_funds.PRICE_FIELDS:
@@ -240,8 +245,70 @@ class ParsePricesTest(unittest.TestCase):
                 raw = prices_response()
                 raw["resultList"][4] = without(raw["resultList"][4], field)
                 with self.assertRaisesRegex(ValueError, "missing fields") as caught:
-                    fetch_funds.parse_prices(raw, CODES)
+                    parse_prices(raw, CODES)
                 self.assertIn(repr([field]), str(caught.exception))
+
+
+class PriceRangesTest(unittest.TestCase):
+    def test_splits_the_window_into_ranges_tefas_accepts(self):
+        end = date(2026, 11, 10)
+        start = end - timedelta(days=fetch_funds.PRICE_WINDOW_DAYS)
+        ranges = fetch_funds.price_ranges(start, end)
+        self.assertEqual(len(ranges), 7)
+        self.assertEqual((ranges[0][0], ranges[-1][1]), (start, end))
+        for first, last in ranges:
+            self.assertLessEqual(first, last)
+            self.assertLessEqual((last - first).days, fetch_funds.PRICE_REQUEST_DAYS)
+        # In date order, with no day left out or fetched twice.
+        for (_, last), (first, _) in zip(ranges, ranges[1:]):
+            self.assertEqual(first, last + timedelta(days=1))
+
+    def test_a_short_window_is_one_range(self):
+        day = date(2026, 11, 10)
+        self.assertEqual(fetch_funds.price_ranges(day, day), [(day, day)])
+        start = day - timedelta(days=fetch_funds.PRICE_REQUEST_DAYS)
+        self.assertEqual(fetch_funds.price_ranges(start, day), [(start, day)])
+
+
+class FetchPricesTest(unittest.TestCase):
+    def test_fetches_each_range_with_a_pause_between_requests(self):
+        end = date(2026, 11, 10)
+        start = end - timedelta(days=2 * fetch_funds.PRICE_REQUEST_DAYS + 5)
+        ranges = fetch_funds.price_ranges(start, end)
+        self.assertEqual(len(ranges), 3)
+        with mock.patch.object(fetch_funds, "fetch_json", side_effect=["a", "b", "c"]) as fetch, \
+                mock.patch.object(fetch_funds.time, "sleep") as sleep:
+            self.assertEqual(fetch_funds.fetch_prices(start, end), ["a", "b", "c"])
+        self.assertEqual(
+            [call.args[1] for call in fetch.call_args_list],
+            [fetch_funds.prices_payload(first, last) for first, last in ranges],
+        )
+        self.assertEqual(
+            sleep.call_args_list,
+            [mock.call(fetch_funds.PRICE_REQUEST_DELAY_SECONDS)] * 2,
+        )
+
+
+@small_limits
+class ParsePricesAcrossResponsesTest(unittest.TestCase):
+    def test_joins_the_dates_of_every_response(self):
+        dates, prices = fetch_funds.parse_prices(
+            [prices_response(dates=DATES[2:]), prices_response(dates=DATES[:2])], CODES
+        )
+        self.assertEqual(dates, DATES)
+        self.assertEqual(prices["AAA"], [1.5, 1.5, 1.5])
+
+    def test_checks_each_response(self):
+        with self.assertRaisesRegex(ValueError, "TEFAS returned an error"):
+            fetch_funds.parse_prices(
+                [prices_response(), {"resultList": [], "errorMessage": "Hata"}], CODES
+            )
+        # The cut-off limit is per response, not for the whole window.
+        codes = CODES + ["DDD"]
+        halves = [prices_response(codes, DATES), prices_response(codes, ["2026-10-05", "2026-10-06", "2026-10-07"])]
+        self.assertGreater(sum(len(raw["resultList"]) for raw in halves), MAX_ROWS)
+        dates, _ = fetch_funds.parse_prices(halves, codes)
+        self.assertEqual(len(dates), 6)
 
 
 @small_limits
@@ -250,7 +317,7 @@ class ResultRowsTest(unittest.TestCase):
 
     PARSERS = {
         "parse": fetch_funds.parse,
-        "parse_prices": lambda raw: fetch_funds.parse_prices(raw, CODES),
+        "parse_prices": lambda raw: parse_prices(raw, CODES),
     }
 
     def assert_rejected(self, make_raw, message):
@@ -278,7 +345,7 @@ class ResultRowsTest(unittest.TestCase):
             {**funds_response(), "errorCode": None, "errorMessage": ""}
         )
         self.assertEqual(codes_of(funds), CODES)
-        dates, _ = fetch_funds.parse_prices(
+        dates, _ = parse_prices(
             {**prices_response(), "errorCode": "", "errorMessage": None}, CODES
         )
         self.assertEqual(dates, DATES)
@@ -306,13 +373,13 @@ class RealLimitsTest(unittest.TestCase):
             fetch_funds.parse(funds_response(self.codes[1:]))
 
     def test_parse_prices(self):
-        fetch_funds.parse_prices(prices_response(self.codes, self.dates), self.codes)
+        parse_prices(prices_response(self.codes, self.dates), self.codes)
         with self.assertRaisesRegex(ValueError, "dates returned"):
-            fetch_funds.parse_prices(
+            parse_prices(
                 prices_response(self.codes, self.dates[1:]), self.codes
             )
         with self.assertRaisesRegex(ValueError, "funds returned"):
-            fetch_funds.parse_prices(
+            parse_prices(
                 prices_response(self.codes[1:], self.dates), self.codes
             )
 
@@ -602,6 +669,8 @@ class MainTest(unittest.TestCase):
         self.output = self.directory / "funds.json"
         self.previous = self.directory / "previous.json"
         for patcher in [
+            # A window that one price request covers.
+            mock.patch.object(fetch_funds, "PRICE_WINDOW_DAYS", fetch_funds.PRICE_REQUEST_DAYS),
             mock.patch.object(fetch_funds, "datetime", FixedDatetime),
             mock.patch("sys.argv", ["fetch_funds.py", str(self.output)]),
             mock.patch("sys.stdout", new_callable=io.StringIO),

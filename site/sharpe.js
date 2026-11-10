@@ -1,5 +1,5 @@
 // Sharpe ratio of each fund over the daily prices in the data file (the last
-// four weeks). A fund's "prices" list has one price (or null) per date in the
+// six months). A fund's "prices" list has one price (or null) per date in the
 // file's "priceDates".
 //
 // The risk-free return for each day is the median return of the money market

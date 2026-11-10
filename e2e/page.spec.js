@@ -468,7 +468,10 @@ test.describe("4-week price line", () => {
   test("each line is an image labelled with the price change over the four weeks", async ({ page }) => {
     // Worked out here from the raw prices rather than with sparkline.js.
     const fund = passing.find((f) => hasTrend.get(f.code));
-    const prices = fund.prices.filter((p) => typeof p === "number" && p > 0);
+    const fourWeeksAgo = new Date(`${data.priceDates.at(-1)}T00:00:00Z`);
+    fourWeeksAgo.setUTCDate(fourWeeksAgo.getUTCDate() - 28);
+    const from = fourWeeksAgo.toISOString().slice(0, 10);
+    const prices = fund.prices.filter((p, i) => data.priceDates[i] >= from && typeof p === "number" && p > 0);
     const change = (prices.at(-1) / prices[0] - 1) * 100;
     const percent = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
       Math.abs(change),

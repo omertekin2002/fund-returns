@@ -6,7 +6,7 @@ import { classifyFunds, membershipChanges } from "../site/changes.js";
 import { dataCoverage } from "../site/coverage.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
-import { sparkline } from "../site/sparkline.js";
+import { recentCount, recentPrices, sparkline } from "../site/sparkline.js";
 
 export const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
 
@@ -18,7 +18,10 @@ const previousUrl = new URL("../site/data/previous.json", import.meta.url);
 export const committedPrevious = existsSync(previousUrl) ? JSON.parse(readFileSync(previousUrl, "utf8")) : null;
 
 // Whether each fund has a 4-week price line (at least two valid prices), by code.
-export const hasTrend = new Map(funds.map((f) => [f.code, sparkline(f.prices, data.priceDates.length) !== null]));
+export const trendDays = recentCount(data.priceDates);
+export const hasTrend = new Map(
+  funds.map((f) => [f.code, sparkline(recentPrices(f.prices, trendDays), trendDays) !== null]),
+);
 
 // The price window and the counts of funds without a 1M return, a Sharpe
 // ratio or a risk level, over every fund.

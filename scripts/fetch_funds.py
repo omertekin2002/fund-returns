@@ -4,8 +4,8 @@
 Fetches the same data as the export on TEFAS > Fon Getirileri > Menkul Kıymet
 Yatırım Fonları (https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT),
 limited to funds traded on TEFAS (the page's default), plus each fund's daily
-prices over the last four weeks from TEFAS > Fon Verileri, which the website
-uses for the Sharpe ratio.
+prices over the last six months from TEFAS > Fon Verileri, which the website
+uses for the Sharpe ratio and the 4-week price line.
 
 Usage: python3 scripts/fetch_funds.py [output_path]
 
@@ -60,14 +60,17 @@ PAYLOAD = {
     "getiriOrani": "1",
 }
 
-# Daily prices of every YAT fund over the last four weeks. TEFAS rejects
-# ranges longer than one month, so this is a single request.
-PRICE_WINDOW_DAYS = 28
+# Daily prices of every YAT fund over the last six months (26 weeks). TEFAS
+# rejects ranges longer than one month, so the window is fetched in requests
+# of four weeks each, with a pause between them (see RETRY_DELAY_SECONDS).
+PRICE_WINDOW_DAYS = 182
+PRICE_REQUEST_DAYS = 28
+PRICE_REQUEST_DELAY_SECONDS = 15
 # The price endpoint pages its rows; all funds over four weeks is ~41,000.
 MAX_PRICE_ROWS = 100000
-# Four weeks hold ~20 business days; a long holiday (Kurban Bayramı) removes
-# up to ~7, so far fewer means the response is broken.
-MIN_PRICE_DATES = 10
+# 26 weeks hold ~125 business days; the public holidays in them remove up to
+# ~15, so far fewer means a response is broken.
+MIN_PRICE_DATES = 100
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 HEADERS = {
@@ -204,14 +207,44 @@ def parse(raw):
     return funds
 
 
-def parse_prices(raw, codes):
+def price_ranges(start, end):
+    """Split start..end (dates, both included) into ranges TEFAS accepts.
+
+    The ranges are in date order, don't overlap, and each spans at most
+    PRICE_REQUEST_DAYS days from its first to its last date.
+    """
+    ranges = []
+    while start <= end:
+        last = min(start + timedelta(days=PRICE_REQUEST_DAYS), end)
+        ranges.append((start, last))
+        start = last + timedelta(days=1)
+    return ranges
+
+
+def fetch_prices(start, end):
+    """Return the TEFAS responses with the prices from start to end, oldest first."""
+    responses = []
+    for first, last in price_ranges(start, end):
+        if responses:
+            time.sleep(PRICE_REQUEST_DELAY_SECONDS)
+        responses.append(
+            fetch_json(PRICES_API_URL, prices_payload(first, last), PRICES_PAGE_URL)
+        )
+    return responses
+
+
+def parse_prices(responses, codes):
     """Return the price dates and, per fund code, its price on each date.
 
+    responses is the list of TEFAS responses that together cover the window.
     A fund's list has None for a date it has no price on.
     """
-    rows = result_rows(raw)
-    if len(rows) >= MAX_PRICE_ROWS:
-        raise ValueError(f"{len(rows)} price rows returned; the list may be cut off")
+    rows = []
+    for raw in responses:
+        chunk = result_rows(raw)
+        if len(chunk) >= MAX_PRICE_ROWS:
+            raise ValueError(f"{len(chunk)} price rows returned; the list may be cut off")
+        rows.extend(chunk)
 
     by_code = {code: {} for code in codes}
     dates = set()
@@ -320,8 +353,9 @@ def main():
 
     end = now.astimezone(ISTANBUL).date()
     start = end - timedelta(days=PRICE_WINDOW_DAYS)
-    raw_prices = fetch_json(PRICES_API_URL, prices_payload(start, end), PRICES_PAGE_URL)
-    price_dates, prices = parse_prices(raw_prices, [fund["code"] for fund in funds])
+    price_dates, prices = parse_prices(
+        fetch_prices(start, end), [fund["code"] for fund in funds]
+    )
     for fund in funds:
         fund["prices"] = prices[fund["code"]]
 

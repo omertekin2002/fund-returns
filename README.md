@@ -31,7 +31,7 @@ A fund is shown only if it breaks none of these rules:
    1M, 3M, 6M, 1Y, 3Y and 5Y where both returns exist (e.g. 3Y below 1Y).
    Year-to-date is not part of this check because its length changes through
    the year.
-6. The 4-week Sharpe ratio (see [below](#sharpe-ratio)) is below 1.0 (a fund
+6. The 6-month Sharpe ratio (see [below](#sharpe-ratio)) is below 1.0 (a fund
    without a ratio is allowed).
 
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
@@ -85,9 +85,9 @@ longer in the data: OLD.".
 
 Next to the update time, the banner names the price dates the data holds:
 the first and last day with TEFAS prices and how many there are, e.g.
-`Prices 2 Oct – 30 Oct 2026 (20 days)` (days without prices, such as
-holidays, are not counted). These are the days behind the Sharpe ratios and
-the 4-week lines. TEFAS gives no date for the period returns, so the page
+`Prices 12 May – 10 Nov 2026 (125 days)` (days without prices, such as
+holidays, are not counted). These are the days behind the Sharpe ratios; the
+4-week lines use the last four weeks of them. TEFAS gives no date for the period returns, so the page
 doesn't give one either. Without valid `priceDates` in the data file it says
 `Price dates unknown`.
 
@@ -101,7 +101,7 @@ the data, whatever the view, filters or search. Both lines are worked out by
 
 ## Sharpe ratio
 
-The **Sharpe** column is each fund's Sharpe ratio over the last four weeks of
+The **Sharpe** column is each fund's Sharpe ratio over the last six months of
 daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
 
 - A fund's daily return is its price change from one price date to the next.
@@ -114,14 +114,14 @@ daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
 - Funds with fewer than 10 daily returns in the window (new funds, or gaps in
   their prices) show no ratio.
 
-Over four weeks the ratio is noisy, and funds with very steady prices (money
-market and short-term funds) can reach large values, positive or negative,
-from small differences against the risk-free return.
+Funds with very steady prices (money market and short-term funds) can reach
+large values, positive or negative, from small differences against the
+risk-free return.
 
 ## 4-week price line
 
-The **4 weeks** column draws each fund's daily prices over the same four weeks
-as a small line, drawn by [`site/sparkline.js`](site/sparkline.js), so you can
+The **4 weeks** column draws each fund's daily prices over the last four weeks
+of that window as a small line, drawn by [`site/sparkline.js`](site/sparkline.js), so you can
 see whether a fund rose steadily, jumped once or fell back. A gap in the line
 is a day without a price. Each line is scaled to its own fund's lowest and
 highest price, so heights can't be compared between rows. Screen readers read
@@ -154,8 +154,9 @@ The button is disabled until the data has loaded, and while no fund matches.
   [TEFAS › Fon Getirileri](https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT)
   with the page's default settings (funds traded on TEFAS only), and the JSON
   API behind [TEFAS › Fon Verileri](https://www.tefas.gov.tr/tr/fon-verileri)
-  for each fund's daily prices over the last four weeks (TEFAS allows at most
-  one month per request). It writes both to
+  for each fund's daily prices over the last six months (TEFAS allows at most
+  one month per request, so it asks for four weeks at a time, 15 seconds
+  apart). It writes both to
   [`site/data/funds.json`](site/data/funds.json), after keeping an earlier
   day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
