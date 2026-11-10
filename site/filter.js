@@ -27,7 +27,7 @@ export const MINIMUM_RETURNS = [
 // changes through the year.
 export const ORDERED_HORIZONS = ["1m", "3m", "6m", "1y", "3y", "5y"];
 
-// Minimum 6-month Sharpe ratio. A fund without one (fewer than 10 daily
+// Minimum 6-month Sharpe ratio. A fund without one (fewer than 21 daily
 // returns in the window) is allowed.
 export const MIN_SHARPE = 1;
 

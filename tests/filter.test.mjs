@@ -168,7 +168,7 @@ test("evidence: the Sharpe rule passes, fails or is missing-allowed", () => {
   for (const sharpe of [null, undefined]) {
     const missing = entryFor({}, "min-sharpe", sharpe);
     assert.equal(missing.outcome, "missing-allowed");
-    assert.equal(missing.measured, "No Sharpe ratio (fewer than 10 daily returns, or no variation)");
+    assert.equal(missing.measured, "No Sharpe ratio (fewer than 21 daily returns, or no variation)");
   }
 });
 

@@ -10,8 +10,8 @@
 export const RISK_FREE_UMBRELLA = "Para Piyasası Şemsiye Fonu";
 export const TRADING_DAYS_PER_YEAR = 252;
 // With fewer daily returns than this (a fund launched or missing prices in
-// the window) there is no ratio.
-export const MIN_RETURNS = 10;
+// the window) there is no ratio: about one month of trading days (252 / 12).
+export const MIN_RETURNS = 21;
 
 const isPrice = (value) => typeof value === "number" && value > 0;
 const isMissing = (value) => value === null || value === undefined;

@@ -111,8 +111,8 @@ daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
   money market funds earn several days of interest at once.
 - The ratio is the mean of the daily excess returns (fund minus risk-free)
   divided by their standard deviation, annualised by multiplying by √252.
-- Funds with fewer than 10 daily returns in the window (new funds, or gaps in
-  their prices) show no ratio.
+- Funds with fewer than 21 daily returns in the window, about one month of
+  trading days (new funds, or gaps in their prices), show no ratio.
 
 Funds with very steady prices (money market and short-term funds) can reach
 large values, positive or negative, from small differences against the

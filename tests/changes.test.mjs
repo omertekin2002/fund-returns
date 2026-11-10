@@ -44,7 +44,7 @@ test("classifyFunds keeps the other fields and doesn't change its input", () => 
 test("classifyFunds works out Sharpe against the money market funds in the same list", () => {
   // Steady money market funds earn 0.1% a day; a fund that loses a little
   // every day against them is out on the Sharpe rule.
-  const days = 15;
+  const days = 30;
   const steady = pricesFrom(Array(days).fill(0.001));
   const losing = pricesFrom(Array.from({ length: days }, (_, i) => (i % 2 ? -0.001 : 0.0005)));
   const funds = classifyFunds([

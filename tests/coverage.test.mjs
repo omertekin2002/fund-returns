@@ -71,7 +71,7 @@ test("counts the funds without a 1M return, a Sharpe ratio or a risk level", () 
 
 test("the Sharpe ratio is counted from the classified funds", () => {
   // Raw funds carry prices, not ratios; classifyFunds works them out.
-  const prices = (step) => Array.from({ length: 20 }, (_, i) => 1 + i * step + (i % 3) * 0.001);
+  const prices = (step) => Array.from({ length: 30 }, (_, i) => 1 + i * step + (i % 3) * 0.001);
   const raw = [
     { code: "MM1", umbrella: "Para Piyasası Şemsiye Fonu", risk: 1, returns: { "1m": 3 }, prices: prices(0.001) },
     { code: "EQ1", umbrella: "Hisse Senedi Şemsiye Fonu", risk: 6, returns: { "1m": 5 }, prices: prices(0.01) },
