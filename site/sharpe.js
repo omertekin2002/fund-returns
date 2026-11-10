@@ -42,13 +42,41 @@ export function riskFreeReturns(funds) {
   );
 }
 
+// A ratio worked out from fewer than this share of the window's daily returns
+// counts as based on a shorter period (see sharpePeriod). A fund missing a
+// few days' prices is still above it.
+export const FULL_WINDOW_SHARE = 0.9;
+const TRADING_DAYS_PER_MONTH = TRADING_DAYS_PER_YEAR / 12;
+
+// The fund's daily returns above the risk-free return, leaving out the days
+// without a fund price or a risk-free return.
+function excessReturns(prices, riskFree) {
+  return dailyReturns(prices)
+    .map((r, day) => (isMissing(r) || isMissing(riskFree[day]) ? null : r - riskFree[day]))
+    .filter((r) => r !== null);
+}
+
+// How much of the window a fund's ratio is based on: { returns, of, months,
+// short }. `returns` is the number of daily returns behind the ratio, `of`
+// the number the window offers (the days with a risk-free return), `months`
+// the returns in months of trading days (at least 1), and `short` whether
+// the ratio covers clearly less than the whole window.
+export function sharpePeriod(prices, riskFree) {
+  const returns = excessReturns(prices, riskFree).length;
+  const of = riskFree.filter((r) => !isMissing(r)).length;
+  return {
+    returns,
+    of,
+    months: Math.max(1, Math.round(returns / TRADING_DAYS_PER_MONTH)),
+    short: returns < of * FULL_WINDOW_SHARE,
+  };
+}
+
 // Annualised Sharpe ratio: the mean daily return above the risk-free return,
 // divided by the standard deviation of that excess return, times √252. Null
 // with too few returns or none of them varying.
 export function sharpeRatio(prices, riskFree) {
-  const excess = dailyReturns(prices)
-    .map((r, day) => (isMissing(r) || isMissing(riskFree[day]) ? null : r - riskFree[day]))
-    .filter((r) => r !== null);
+  const excess = excessReturns(prices, riskFree);
   if (excess.length < MIN_RETURNS) return null;
   const mean = excess.reduce((sum, r) => sum + r, 0) / excess.length;
   const variance = excess.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (excess.length - 1);

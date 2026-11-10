@@ -57,6 +57,27 @@ test("classifyFunds works out Sharpe against the money market funds in the same 
   assert.equal(los.reason.rule, "min-sharpe");
 });
 
+test("classifyFunds marks a ratio based on clearly less than the whole window", () => {
+  const days = 100;
+  const steady = pricesFrom(Array(days).fill(0.001));
+  const moving = pricesFrom(Array.from({ length: days }, (_, i) => (i % 2 ? -0.001 : 0.004)));
+  const from = (prices, first) => prices.map((price, day) => (day < first ? null : price));
+  const funds = classifyFunds([
+    fund("MM1", PASSING_RETURNS, { umbrella: RISK_FREE_UMBRELLA, prices: steady }),
+    fund("OLD", PASSING_RETURNS, { prices: moving }),
+    fund("GAP", PASSING_RETURNS, { prices: moving.map((price, day) => (day === 50 ? null : price)) }),
+    fund("NEW", PASSING_RETURNS, { prices: from(moving, 58) }),
+    fund("TOO", PASSING_RETURNS, { prices: from(moving, 95) }),
+  ]);
+  const short = Object.fromEntries(funds.map((f) => [f.code, f.sharpeShort]));
+  assert.equal(short.OLD, null);
+  assert.equal(short.GAP, null);
+  assert.deepEqual(short.NEW, { returns: 42, of: 100, months: 2 });
+  // Without a ratio there is nothing to mark.
+  assert.equal(funds.find((f) => f.code === "TOO").sharpe, null);
+  assert.equal(short.TOO, null);
+});
+
 const changes = (current, previous) => membershipChanges(classifyFunds(current), classifyFunds(previous));
 
 test("a fund that passes now but didn't before entered", () => {

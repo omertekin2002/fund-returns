@@ -2,15 +2,19 @@
 // data/previous.json is the last earlier day's data/funds.json (kept by
 // scripts/fetch_funds.py); both are classified with the same rules.
 import { exclusionReason } from "./filter.js";
-import { riskFreeReturns, sharpeRatio } from "./sharpe.js";
+import { riskFreeReturns, sharpePeriod, sharpeRatio } from "./sharpe.js";
 
-// Adds each fund's 6-month Sharpe ratio and its exclusion reason (null if it
-// passes every rule) to the funds of a data file.
+// Adds each fund's 6-month Sharpe ratio, its exclusion reason (null if it
+// passes every rule) and, when the ratio is based on clearly less than six
+// months of prices, that shorter period as sharpeShort ({ returns, of,
+// months }, see sharpePeriod; otherwise null) to the funds of a data file.
 export function classifyFunds(funds) {
   const riskFree = riskFreeReturns(funds);
   return funds.map((raw) => {
     const fund = { ...raw, sharpe: sharpeRatio(raw.prices, riskFree) };
-    return { ...fund, reason: exclusionReason(fund) };
+    const { short, ...period } = sharpePeriod(raw.prices, riskFree);
+    const sharpeShort = fund.sharpe !== null && short ? period : null;
+    return { ...fund, sharpeShort, reason: exclusionReason(fund) };
   });
 }
 

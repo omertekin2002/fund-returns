@@ -175,6 +175,18 @@ function badge(text, title) {
   return span;
 }
 
+// The note before a Sharpe ratio based on clearly less than six months of
+// prices, e.g. "3 MO" for about three months of daily returns.
+function shortPeriodBadge({ returns, of, months }) {
+  const span = document.createElement("span");
+  span.className = "sharpe-note";
+  span.textContent = `${months} MO`;
+  span.title =
+    `Based on about ${months} ${months === 1 ? "month" : "months"} of prices ` +
+    `(${returns} of ${of} daily returns), not the full 6 months`;
+  return span;
+}
+
 // The fund's 4-week price line as an inline SVG, from the points worked out
 // when the data loaded.
 function sparklineSvg(trend) {
@@ -220,7 +232,8 @@ function renderBody() {
       } else if (col.type === "return") {
         td.textContent = formatReturn(value);
       } else if (col.type === "ratio") {
-        td.textContent = formatRatio(value);
+        if (col.key === "sharpe" && fund.sharpeShort) td.append(shortPeriodBadge(fund.sharpeShort), " ");
+        td.append(formatRatio(value));
       } else if (col.type === "sparkline") {
         if (value) td.append(sparklineSvg(value));
         else td.textContent = "—";

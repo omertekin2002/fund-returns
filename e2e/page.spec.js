@@ -154,7 +154,8 @@ test.describe("URL state", () => {
     await expect(rows(page)).toHaveCount(matching.length);
 
     const values = (await page.locator("#funds tbody td.col-sharpe").allTextContents()).map((text) =>
-      text === "—" ? null : Number(text.replace(/,/g, "")),
+      // Without the "3 MO" note before a ratio based on less than six months.
+      text === "—" ? null : Number(text.replace(/^\d+ MO /, "").replace(/,/g, "")),
     );
     const present = values.filter((v) => v !== null);
     expect(present).toEqual([...present].sort((a, b) => a - b));
@@ -1234,5 +1235,51 @@ test.describe("CSV download", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     const file = await download(page);
     expect(file.rows).toHaveLength(passing.length + 1);
+  });
+});
+
+test.describe("Sharpe ratios based on less than six months", () => {
+  const short = funds.filter((f) => f.sharpeShort);
+  const notes = (page) => page.locator("#funds tbody td.col-sharpe .sharpe-note");
+  const cell = (page, code) =>
+    page
+      .locator("#funds tbody tr", { has: page.locator("td.col-code a", { hasText: new RegExp(`^${code}$`) }) })
+      .locator("td.col-sharpe");
+
+  test("have a note with the months of prices behind them, and the others have none", async ({ page }) => {
+    // The committed data has funds of both kinds.
+    expect(short.length).toBeGreaterThan(0);
+    expect(short.length).toBeLessThan(funds.filter((f) => f.sharpe !== null).length);
+    await open(page, "?view=all");
+    await expect(notes(page)).toHaveCount(short.length);
+
+    const fund = short[0];
+    const { returns, of, months } = fund.sharpeShort;
+    expect(returns).toBeLessThan(of * 0.9);
+    await page.locator("#search").fill(fund.code);
+    const note = cell(page, fund.code).locator(".sharpe-note");
+    await expect(note).toHaveText(`${months} MO`);
+    await expect(note).toHaveAttribute(
+      "title",
+      `Based on about ${months} ${months === 1 ? "month" : "months"} of prices ` +
+        `(${returns} of ${of} daily returns), not the full 6 months`,
+    );
+    await expect(cell(page, fund.code)).toHaveText(new RegExp(`^${months} MO -?[\\d,]+\\.\\d\\d$`));
+
+    const full = funds.find((f) => f.sharpe !== null && !f.sharpeShort);
+    await page.locator("#search").fill(full.code);
+    await expect(cell(page, full.code).locator(".sharpe-note")).toHaveCount(0);
+    const none = funds.find((f) => f.sharpe === null);
+    if (none) {
+      await page.locator("#search").fill(none.code);
+      await expect(cell(page, none.code)).toHaveText("—");
+    }
+  });
+
+  test("fit a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page, `?view=all&q=${encodeURIComponent(short[0].code)}`);
+    await expect(cell(page, short[0].code).locator(".sharpe-note")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
 });

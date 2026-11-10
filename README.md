@@ -113,6 +113,12 @@ daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
   divided by their standard deviation, annualised by multiplying by √252.
 - Funds with fewer than 21 daily returns in the window, about one month of
   trading days (new funds, or gaps in their prices), show no ratio.
+- A ratio based on fewer than 90% of the window's daily returns (a fund
+  launched in the last six months, or with long gaps in its prices) has a
+  note before it, e.g. `3 MO` for about three months of prices (21 daily
+  returns to a month). Its tooltip gives the count, e.g. "Based on about 3
+  months of prices (63 of 124 daily returns), not the full 6 months". A fund
+  missing only a few days' prices has no note.
 
 Funds with very steady prices (money market and short-term funds) can reach
 large values, positive or negative, from small differences against the

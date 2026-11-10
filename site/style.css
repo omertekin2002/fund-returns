@@ -430,6 +430,18 @@ th button[data-dir="desc"]::after {
   background: var(--tint-salmon);
 }
 
+/* Before a Sharpe ratio based on less than six months of prices: a small
+   flat block like the NEW / LEFT badges, in sticker yellow. */
+.sharpe-note {
+  display: inline-block;
+  padding: 1px var(--space-xs);
+  border: var(--hairline);
+  background: var(--yellow-sticker);
+  color: var(--ink);
+  font: 700 10px/1.2 var(--font-ui);
+  vertical-align: 1px;
+}
+
 .col-umbrella {
   min-width: 140px;
 }

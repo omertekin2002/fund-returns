@@ -1,7 +1,14 @@
 // Run with: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MIN_RETURNS, RISK_FREE_UMBRELLA, dailyReturns, riskFreeReturns, sharpeRatio } from "../site/sharpe.js";
+import {
+  MIN_RETURNS,
+  RISK_FREE_UMBRELLA,
+  dailyReturns,
+  riskFreeReturns,
+  sharpePeriod,
+  sharpeRatio,
+} from "../site/sharpe.js";
 
 // Prices that start at 1 and move by the given daily returns.
 const pricesFrom = (returns) => returns.reduce((prices, r) => [...prices, prices.at(-1) * (1 + r)], [1]);
@@ -61,4 +68,27 @@ test("no ratio with too few returns or no variation", () => {
   const prices = pricesFrom(Array(MIN_RETURNS).fill(0.001));
   assert.equal(sharpeRatio(prices, dailyReturns(prices)), null);
   assert.equal(sharpeRatio(undefined, riskFree), null);
+});
+
+test("sharpePeriod counts the returns behind a ratio against the window's", () => {
+  const riskFree = Array(124).fill(0.001);
+  const full = pricesFrom(riskFree);
+  assert.deepEqual(sharpePeriod(full, riskFree), { returns: 124, of: 124, months: 6, short: false });
+  // A fund launched three months into the window has no earlier prices.
+  const late = full.map((price, day) => (day < 61 ? null : price));
+  assert.deepEqual(sharpePeriod(late, riskFree), { returns: 63, of: 124, months: 3, short: true });
+  // Days without a risk-free return aren't offered by the window.
+  const gaps = [...Array(100).fill(0.001), ...Array(24).fill(null)];
+  assert.deepEqual(sharpePeriod(full, gaps), { returns: 100, of: 100, months: 5, short: false });
+});
+
+test("a few missing days don't make a period short, and it is at least one month", () => {
+  const riskFree = Array(124).fill(0.001);
+  const prices = pricesFrom(riskFree);
+  // 112 of 124 returns is just above 90%; 111 is below.
+  const from = (first) => prices.map((price, day) => (day < first ? null : price));
+  assert.equal(sharpePeriod(from(12), riskFree).short, false);
+  assert.equal(sharpePeriod(from(13), riskFree).short, true);
+  assert.equal(sharpePeriod(from(120), riskFree).months, 1);
+  assert.deepEqual(sharpePeriod(undefined, riskFree), { returns: 0, of: 124, months: 1, short: true });
 });
