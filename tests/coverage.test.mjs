@@ -73,7 +73,8 @@ test("the Sharpe ratio is counted from the classified funds", () => {
   // Raw funds carry prices, not ratios; classifyFunds works them out.
   const prices = (step) => Array.from({ length: 30 }, (_, i) => 1 + i * step + (i % 3) * 0.001);
   const raw = [
-    { code: "MM1", umbrella: "Para Piyasası Şemsiye Fonu", risk: 1, returns: { "1m": 3 }, prices: prices(0.001) },
+    // A money market fund that only accrues interest, for the risk-free return.
+    { code: "MM1", umbrella: "Para Piyasası Şemsiye Fonu", risk: 1, returns: { "1m": 3 }, prices: prices(0.002) },
     { code: "EQ1", umbrella: "Hisse Senedi Şemsiye Fonu", risk: 6, returns: { "1m": 5 }, prices: prices(0.01) },
     { code: "NEW", umbrella: "Hisse Senedi Şemsiye Fonu", risk: 6, returns: { "1m": 5 }, prices: [null, 1, 1.1] },
   ];
@@ -131,7 +132,7 @@ test("no text names a date for the period returns", () => {
 
 test("the committed data has a price window and matching counts", () => {
   const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
-  const funds = classifyFunds(data.funds);
+  const funds = classifyFunds(data.funds, data);
   const { window, counts } = dataCoverage(data, funds);
   assert.deepEqual(window, {
     first: data.priceDates[0],

@@ -8,8 +8,10 @@ import { riskFreeReturns, sharpePeriod, sharpeRatio } from "./sharpe.js";
 // passes every rule) and, when the ratio is based on clearly less than six
 // months of prices, that shorter period as sharpeShort ({ returns, of,
 // months }, see sharpePeriod; otherwise null) to the funds of a data file.
-export function classifyFunds(funds) {
-  const riskFree = riskFreeReturns(funds);
+// `data` is that file, for the rates behind the risk-free return (see
+// sharpe.js); without it only the money market funds in the list are used.
+export function classifyFunds(funds, data) {
+  const riskFree = riskFreeReturns(funds, data);
   return funds.map((raw) => {
     const fund = { ...raw, sharpe: sharpeRatio(raw.prices, riskFree) };
     const { short, ...period } = sharpePeriod(raw.prices, riskFree);

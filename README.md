@@ -105,10 +105,22 @@ The **Sharpe** column is each fund's Sharpe ratio over the last six months of
 daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
 
 - A fund's daily return is its price change from one price date to the next.
-- The risk-free return for each day is the median daily return of the money
-  market funds (Para Piyasası Şemsiye Fonu) in the list. It follows the market
-  rate without being updated by hand, and covers weekends and holidays, when
-  money market funds earn several days of interest at once.
+- The risk-free return for each day is the highest of three measures:
+  - **TLREF**, the Turkish lira overnight reference rate
+    ([Borsa İstanbul](https://www.borsaistanbul.com/en/indices/tlref));
+  - the central bank's **policy rate**, the one-week repo rate
+    ([TCMB](https://www.tcmb.gov.tr/wps/wcm/connect/en/tcmb+en/main+menu/core+functions/monetary+policy/central+bank+interest+rates/1+week+repo));
+  - the median daily return of the steady **money market funds** (Para
+    Piyasası Şemsiye Fonu) in the list. A money market fund with a negative
+    daily return in the window, or one above twice that day's median of all
+    money market funds, is left out of this median.
+
+  The two rates are annual; the rate on a price date earns `rate × days / 365`
+  over the calendar days to the next price date, so all three measures cover
+  weekends and holidays, when money market funds earn several days of interest
+  at once. The rates are in the data file's `riskFreeRates`, one per price
+  date. A measure with no value for a day (a rate missing from the data file,
+  or no steady money market fund) is left out of that day's highest.
 - The ratio is the mean of the daily excess returns (fund minus risk-free)
   divided by their standard deviation, annualised by multiplying by √252.
 - Funds with fewer than 21 daily returns in the window, about one month of
@@ -168,6 +180,16 @@ The button is disabled until the data has loaded, and while no fund matches.
   [Changes since the last update](#changes-since-the-last-update)). It uses
   only the Python standard library and refuses to overwrite the file if a
   response looks wrong.
+- The script also fetches the two interest rates behind the
+  [risk-free return](#sharpe-ratio): TLREF from the data behind Borsa
+  İstanbul's TLREF page, and the policy rate from the TCMB's table of one-week
+  repo rates. It writes one rate per price date to `riskFreeRates` in the data
+  file. TLREF for a day is published that afternoon, after the update has run,
+  so the newest price date takes the day before's rate (a rate is used for
+  the return from its date to the next, so the newest date's rate isn't used
+  yet). The fund data doesn't depend on the rates: if one can't be fetched,
+  the script logs it, keeps the rates the existing file has, gives a new date
+  the latest earlier rate (at most 10 days old) and still writes the new data.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier
@@ -261,7 +283,8 @@ ratio, price line, data freshness, coverage, URL state, changes and CSV tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
-retries, atomic write and keeping of `previous.json` with fixtures and mocks,
+retries, atomic write, interest rates (including a source that can't be
+fetched) and keeping of `previous.json` with fixtures and mocks,
 and the trigger check tests
 cover its decision with fixture `gh run list` output, so they need no network
 and no packages.

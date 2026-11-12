@@ -7,6 +7,12 @@ limited to funds traded on TEFAS (the page's default), plus each fund's daily
 prices over the last six months from TEFAS > Fon Verileri, which the website
 uses for the Sharpe ratio and the 4-week price line.
 
+Also fetches two interest rates for the risk-free return behind the Sharpe
+ratio: TLREF, the Turkish lira overnight reference rate, from Borsa İstanbul,
+and the central bank's policy rate (the one-week repo rate) from the TCMB.
+The fund data doesn't depend on them: when a rate can't be fetched, the
+script keeps the rates the existing file has and still writes the new data.
+
 Usage: python3 scripts/fetch_funds.py [output_path]
 
 Uses only the Python standard library so the workflow needs no install step.
@@ -22,6 +28,7 @@ compares against the last earlier day.
 import http.client
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -33,6 +40,19 @@ API_URL = "https://www.tefas.gov.tr/api/funds/fonGetiriBazliBilgiGetir"
 PAGE_URL = "https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT"
 PRICES_API_URL = "https://www.tefas.gov.tr/api/funds/fonGnlBlgSiraliGetir"
 PRICES_PAGE_URL = "https://www.tefas.gov.tr/tr/fon-verileri"
+# The data behind the TLREF table on Borsa İstanbul's TLREF page: the rate of
+# every business day in the last {days} days.
+TLREF_API_URL = (
+    "https://www.borsaistanbul.com/bist-tlrefk.php"
+    "?op=fetchTlrefkData&dataType=tlref-history&day={days}"
+)
+TLREF_PAGE_URL = "https://www.borsaistanbul.com/en/indices/tlref"
+# The TCMB's table of one-week repo rates: one row per change, with the day
+# the rate took effect.
+POLICY_RATE_URL = (
+    "https://www.tcmb.gov.tr/wps/wcm/connect/en/tcmb+en/main+menu/core+functions"
+    "/monetary+policy/central+bank+interest+rates/1+week+repo"
+)
 DEFAULT_OUTPUT = os.path.join(
     os.path.dirname(__file__), "..", "site", "data", "funds.json"
 )
@@ -102,6 +122,18 @@ MIN_EXPECTED_FUNDS = 200
 ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 20  # TEFAS rate-limits to a few requests per minute
 
+# The interest rates are fetched with fewer attempts: the update goes on
+# without them.
+RATE_ATTEMPTS = 2
+# A price date without a rate takes the latest earlier one, up to this many
+# days back. The newest date needs it every day: TLREF is published in the
+# afternoon, after the update has run.
+RATE_MAX_AGE_DAYS = 10
+# Annual rates in percent outside this range mean a response is broken.
+MAX_RATE = 500
+# The TCMB table has ~60 rows; far fewer means the page has changed.
+MIN_POLICY_RATE_ROWS = 10
+
 
 def prices_payload(start, end):
     """Request body of the TEFAS > Fon Verileri page for all YAT funds."""
@@ -126,23 +158,38 @@ def prices_payload(start, end):
     }
 
 
-def fetch_json(url, payload, referer):
-    body = json.dumps(payload).encode("utf-8")
-    headers = {**HEADERS, "Referer": referer}
+def fetch(url, payload, referer, decode, attempts=ATTEMPTS):
+    """Return decode(the response body as text), retrying failed attempts.
+
+    Posts payload as JSON, or sends a GET request when it is None. decode
+    raises ValueError for a body that isn't what the caller expects.
+    """
+    if payload is None:
+        body = None
+        headers = {"User-Agent": HEADERS["User-Agent"], "Accept": "*/*"}
+    else:
+        body = json.dumps(payload).encode("utf-8")
+        headers = dict(HEADERS)
+    if referer:
+        headers["Referer"] = referer
     last_error = None
-    for attempt in range(1, ATTEMPTS + 1):
+    for attempt in range(1, attempts + 1):
         request = urllib.request.Request(url, data=body, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=60) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return decode(response.read().decode("utf-8"))
         # OSError covers URLError/HTTPError, timeouts and dropped connections;
-        # ValueError covers a non-JSON body such as a bot-protection page.
+        # ValueError covers an unexpected body such as a bot-protection page.
         except (OSError, http.client.HTTPException, ValueError) as exc:
             last_error = exc
-            print(f"Attempt {attempt}/{ATTEMPTS} failed: {exc}", file=sys.stderr)
-            if attempt < ATTEMPTS:
+            print(f"Attempt {attempt}/{attempts} failed: {exc}", file=sys.stderr)
+            if attempt < attempts:
                 time.sleep(RETRY_DELAY_SECONDS * attempt)
-    raise RuntimeError(f"Could not fetch data from TEFAS: {last_error}")
+    raise RuntimeError(f"Could not fetch {url}: {last_error}")
+
+
+def fetch_json(url, payload, referer, attempts=ATTEMPTS):
+    return fetch(url, payload, referer, json.loads, attempts)
 
 
 def to_number(value):
@@ -271,7 +318,147 @@ def parse_prices(responses, codes):
     }
 
 
-def render(funds, fetched_at, price_dates):
+def to_rate(value):
+    """An annual rate in percent as a float; ValueError if it can't be one."""
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Not a rate: {value!r}") from None
+    if not 0 <= rate <= MAX_RATE:  # also rejects NaN
+        raise ValueError(f"Rate out of range: {value!r}")
+    return rate
+
+
+def parse_tlref(raw):
+    """Return {ISO date: TLREF in percent} from Borsa İstanbul's response."""
+    if not isinstance(raw, dict) or raw.get("status") != "success":
+        raise ValueError("Unexpected TLREF response")
+    rows = raw.get("data")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("TLREF response has no data")
+    rates = {}
+    for row in rows:
+        if not isinstance(row, dict) or "date" not in row or "clval" not in row:
+            raise ValueError(f"TLREF row is missing fields: {row}")
+        day = str(row["date"])[:10]
+        datetime.strptime(day, "%Y-%m-%d")  # ValueError if it isn't a date
+        rates[day] = to_rate(row["clval"])
+    return rates
+
+
+def parse_policy_rate(page):
+    """Return the policy rate changes on the TCMB page, oldest first.
+
+    Each is (ISO date the rate took effect, rate in percent). The table's
+    rows are "DD.MM.YYYY", a borrowing rate ("-" for years now) and the
+    lending rate, which is the policy rate.
+    """
+    changes = []
+    for row in re.findall(r"<tr\b.*?</tr>", page, flags=re.S | re.I):
+        cells = [
+            re.sub(r"<[^>]+>", "", cell).strip()
+            for cell in re.findall(r"<td\b[^>]*>(.*?)</td>", row, flags=re.S | re.I)
+        ]
+        if len(cells) < 3 or not re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", cells[0]):
+            continue
+        day = datetime.strptime(cells[0], "%d.%m.%Y").strftime("%Y-%m-%d")
+        changes.append((day, to_rate(cells[-1].replace(",", "."))))
+    if len(changes) < MIN_POLICY_RATE_ROWS:
+        raise ValueError(
+            f"Only {len(changes)} policy rates found (expected at least {MIN_POLICY_RATE_ROWS})"
+        )
+    return sorted(changes)
+
+
+def fetch_tlref(days):
+    """Return {ISO date: TLREF in percent} for the last `days` days."""
+    return fetch(
+        TLREF_API_URL.format(days=days),
+        None,
+        TLREF_PAGE_URL,
+        lambda text: parse_tlref(json.loads(text)),
+        RATE_ATTEMPTS,
+    )
+
+
+def fetch_policy_rate():
+    """Return the policy rate changes, see parse_policy_rate."""
+    return fetch(POLICY_RATE_URL, None, None, parse_policy_rate, RATE_ATTEMPTS)
+
+
+def policy_rate_on(changes, dates):
+    """Return {date: the policy rate in effect} for the dates a rate covers."""
+    rates = {}
+    for date in dates:
+        in_effect = [rate for day, rate in changes if day <= date]
+        if in_effect:
+            rates[date] = in_effect[-1]
+    return rates
+
+
+def rates_for(price_dates, known):
+    """Return one rate (or None) per price date from known, {ISO date: rate}.
+
+    A date without a rate takes the latest earlier one, if that is at most
+    RATE_MAX_AGE_DAYS days before it.
+    """
+    days = sorted(known)
+    rates = []
+    for date in price_dates:
+        earlier = [day for day in days if day <= date]
+        oldest = (
+            datetime.strptime(date, "%Y-%m-%d") - timedelta(days=RATE_MAX_AGE_DAYS)
+        ).strftime("%Y-%m-%d")
+        rates.append(known[earlier[-1]] if earlier and earlier[-1] >= oldest else None)
+    return rates
+
+
+def existing_rates(path):
+    """Return the rates in the data file at path, as {name: {ISO date: rate}}.
+
+    Empty for a missing or unreadable file, or one without rates.
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return {
+            name: {
+                date: to_rate(rate)
+                for date, rate in zip(data["priceDates"], rates)
+                if rate is not None
+            }
+            for name, rates in data["riskFreeRates"].items()
+        }
+    # Whatever is wrong with the old file, the update goes on without it.
+    except Exception:
+        return {}
+
+
+def risk_free_rates(price_dates, window_days, existing):
+    """Return {"tlref": [...], "policy": [...]}: a rate per price date, or None.
+
+    The rates are annual, in percent. existing is what existing_rates() read
+    from the data file being replaced: its rates fill in for a source that
+    can't be fetched. Never raises: the fund data must still be written.
+    """
+    sources = {
+        # Reaching back before the window gives its first date a rate too.
+        "tlref": lambda: fetch_tlref(window_days + 2 * RATE_MAX_AGE_DAYS),
+        "policy": lambda: policy_rate_on(fetch_policy_rate(), price_dates),
+    }
+    rates = {}
+    for name, fetch_rates in sources.items():
+        known = dict(existing.get(name, {}))
+        try:
+            known.update(fetch_rates())
+        # Any error here is only logged: it must not stop the fund data being written.
+        except Exception as exc:
+            print(f"Keeping the earlier {name} rates: {exc}", file=sys.stderr)
+        rates[name] = rates_for(price_dates, known)
+    return rates
+
+
+def render(funds, fetched_at, price_dates, rates=None):
     header = {
         "fetchedAt": fetched_at,
         "source": PAGE_URL,
@@ -280,6 +467,10 @@ def render(funds, fetched_at, price_dates):
         # Each fund's "prices" list has one price (or null) per date here.
         "priceDates": price_dates,
     }
+    if rates:
+        # Annual interest rates in percent, one (or null) per date in
+        # priceDates: TLREF and the central bank's policy rate.
+        header["riskFreeRates"] = rates
     header_lines = "".join(
         f"  {json.dumps(key)}: {json.dumps(value, ensure_ascii=False)},\n"
         for key, value in header.items()
@@ -359,8 +550,12 @@ def main():
     for fund in funds:
         fund["prices"] = prices[fund["code"]]
 
+    rates = risk_free_rates(price_dates, PRICE_WINDOW_DAYS, existing_rates(output))
+    for name, values in rates.items():
+        print(f"{name}: a rate for {sum(v is not None for v in values)} of {len(values)} dates")
+
     fetched_at = now.isoformat().replace("+00:00", "Z")
-    text = render(funds, fetched_at, price_dates)
+    text = render(funds, fetched_at, price_dates, rates)
     json.loads(text)  # sanity check that the hand-assembled JSON is valid
     rotate_previous(output, previous, fetched_at)
     write_atomically(output, text)

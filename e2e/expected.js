@@ -10,7 +10,7 @@ import { recentCount, recentPrices, sparkline } from "../site/sparkline.js";
 
 export const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
 
-export const funds = classifyFunds(data.funds);
+export const funds = classifyFunds(data.funds, data);
 
 // The committed previous update (data/previous.json), or null before the
 // first daily update has kept one.
@@ -56,8 +56,8 @@ export function filtered({ type = "", risk = "" } = {}) {
 // entered), two excluded funds had a passing fund's returns and prices then
 // (so they left), a passing fund no longer in the data (so it left and is
 // gone), and another passing fund was not in the data yet (so it entered by
-// appearing). Money market funds are left alone so the risk-free return is the
-// same. The expected changes are worked out with changes.js, as the page does.
+// appearing). Money market funds and the rates are left alone so the risk-free
+// return is the same. The expected changes are worked out with changes.js, as the page does.
 export function previousData() {
   const enteredCodes = passing.slice(0, 2).map((f) => f.code);
   const leftCodes = excluded
@@ -81,6 +81,6 @@ export function previousData() {
     fetchedAt: new Date(new Date(data.fetchedAt).getTime() - 24 * 60 * 60 * 1000).toISOString(),
     funds: [...previousFunds, goneFund],
   };
-  const changes = membershipChanges(funds, classifyFunds(previous.funds));
+  const changes = membershipChanges(funds, classifyFunds(previous.funds, previous));
   return { previous, changes, enteredCodes, leftCodes, goneCode: goneFund.code, newCode };
 }

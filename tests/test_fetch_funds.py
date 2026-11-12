@@ -420,8 +420,8 @@ class RenderTest(unittest.TestCase):
         },
     ]
 
-    def render(self):
-        return fetch_funds.render(self.funds, "2026-10-20T07:15:33Z", DATES)
+    def render(self, rates=None):
+        return fetch_funds.render(self.funds, "2026-10-20T07:15:33Z", DATES, rates)
 
     def test_output_is_json_with_header_and_funds(self):
         data = json.loads(self.render())
@@ -435,6 +435,21 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(data["fundCount"], 2)
         self.assertEqual(data["priceDates"], DATES)
         self.assertEqual(data["funds"], self.funds)
+
+    def test_rates_follow_the_price_dates(self):
+        rates = {"tlref": [39.98, None, 40.01], "policy": [37.0, 37.0, 36.0]}
+        data = json.loads(self.render(rates))
+        self.assertEqual(
+            list(data),
+            ["fetchedAt", "source", "fundType", "fundCount", "priceDates", "riskFreeRates", "funds"],
+        )
+        self.assertEqual(data["riskFreeRates"], rates)
+        self.assertEqual(data["funds"], self.funds)
+        # On one line, like the price dates.
+        self.assertEqual(
+            [line for line in self.render(rates).splitlines() if "riskFreeRates" in line],
+            ['  "riskFreeRates": ' + json.dumps(rates) + ","],
+        )
 
     def test_one_fund_per_line(self):
         text = self.render()
@@ -529,6 +544,29 @@ class FetchJsonTest(unittest.TestCase):
         self.assertEqual(request.get_header("Content-type"), "application/json")
         self.sleep.assert_not_called()
 
+    def test_without_a_payload_it_is_a_get_request(self):
+        self.urlopen.return_value = response("<table></table>")
+        text = fetch_funds.fetch(self.URL, None, None, str.upper, attempts=2)
+        self.assertEqual(text, "<TABLE></TABLE>")
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertIsNone(request.data)
+        self.assertIsNone(request.get_header("Referer"))
+        self.assertIsNone(request.get_header("Content-type"))
+        self.assertIsNone(request.get_header("Origin"))
+        self.assertTrue(request.get_header("User-agent"))
+
+    def test_retries_a_body_the_decoder_rejects_up_to_the_given_attempts(self):
+        self.urlopen.side_effect = [response("<html>oops</html>"), response("<html>oops</html>")]
+
+        def decode(text):
+            raise ValueError("no table")
+
+        with self.assertRaisesRegex(RuntimeError, f"Could not fetch {self.URL}: no table"):
+            fetch_funds.fetch(self.URL, None, self.REFERER, decode, attempts=2)
+        self.assertEqual(self.urlopen.call_count, 2)
+        self.assertEqual(self.sleep.call_count, 1)
+
     def test_retries_after_a_network_error_and_a_non_json_body(self):
         self.urlopen.side_effect = [
             OSError("Connection reset by peer"),
@@ -565,6 +603,266 @@ class FetchJsonTest(unittest.TestCase):
         # No sleep after the last attempt.
         self.assertEqual(self.sleep.call_count, attempts - 1)
         self.assertIn(f"Attempt {attempts}/{attempts} failed", self.stderr.getvalue())
+
+
+def tlref_response(rates):
+    """Borsa İstanbul's response for {ISO date: rate}, newest first as it sends it."""
+    return {
+        "status": "success",
+        "source": "api",
+        "data": [
+            {"indSname": "TLREF", "clval": f"{rate:.4f}", "date": day}
+            for day, rate in sorted(rates.items(), reverse=True)
+        ],
+    }
+
+
+def policy_page(rows):
+    """The TCMB page's table for (date as DD.MM.YYYY, lending rate) rows."""
+    body = "".join(
+        f"<tr>\n\t<td>{day}</td>\n\t<td>-</td>\n\t<td>{rate}</td>\n</tr>\n" for day, rate in rows
+    )
+    return (
+        '<html><table id="midTable"><thead><tr><th>DATE</th><th>Borrowing</th>'
+        f"<th>Lending</th></tr></thead><tbody><tr><td></td><td></td><td></td></tr>{body}</tbody></table></html>"
+    )
+
+
+POLICY_ROWS = [(f"{day:02d}.01.2020", f"{10 + day}.00") for day in range(1, 11)] + [
+    ("23.01.2026", "37.00"),
+    ("23.10.2026", "36.00"),
+]
+
+
+class ParseTlrefTest(unittest.TestCase):
+    def test_maps_dates_to_rates(self):
+        rates = {"2026-10-01": 39.9846, "2026-09-30": 40.0}
+        self.assertEqual(fetch_funds.parse_tlref(tlref_response(rates)), rates)
+
+    def test_keeps_the_date_of_a_timestamp(self):
+        raw = tlref_response({"2026-10-01": 39.5})
+        raw["data"][0]["date"] = "2026-10-01T00:00:00"
+        self.assertEqual(fetch_funds.parse_tlref(raw), {"2026-10-01": 39.5})
+
+    def test_rejects_an_unexpected_response(self):
+        good = tlref_response({"2026-10-01": 39.5})
+        for raw in [
+            [],
+            {"status": "error", "data": good["data"]},
+            {"status": "success"},
+            {"status": "success", "data": []},
+            {"status": "success", "data": [{"date": "2026-10-01"}]},
+            {"status": "success", "data": [{"date": "01.10.2026", "clval": "39.5"}]},
+            {"status": "success", "data": [{"date": "2026-10-01", "clval": "n/a"}]},
+            {"status": "success", "data": [{"date": "2026-10-01", "clval": None}]},
+            {"status": "success", "data": [{"date": "2026-10-01", "clval": "-1"}]},
+            {"status": "success", "data": [{"date": "2026-10-01", "clval": "3950"}]},
+            {"status": "success", "data": [{"date": "2026-10-01", "clval": "nan"}]},
+        ]:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                fetch_funds.parse_tlref(raw)
+
+
+class ParsePolicyRateTest(unittest.TestCase):
+    def test_returns_the_changes_oldest_first(self):
+        changes = fetch_funds.parse_policy_rate(policy_page(reversed(POLICY_ROWS)))
+        self.assertEqual(len(changes), len(POLICY_ROWS))
+        self.assertEqual(changes[0], ("2020-01-01", 11.0))
+        self.assertEqual(changes[-2:], [("2026-01-23", 37.0), ("2026-10-23", 36.0)])
+
+    def test_reads_a_decimal_comma(self):
+        rows = POLICY_ROWS[:-1] + [("23.10.2026", "36,50")]
+        self.assertEqual(fetch_funds.parse_policy_rate(policy_page(rows))[-1], ("2026-10-23", 36.5))
+
+    def test_rejects_a_page_without_the_table(self):
+        for page in ["<html>Request Rejected</html>", policy_page(POLICY_ROWS[:3])]:
+            with self.subTest(page=page[:30]), self.assertRaisesRegex(ValueError, "policy rates found"):
+                fetch_funds.parse_policy_rate(page)
+
+    def test_rejects_a_rate_that_is_not_a_number(self):
+        rows = POLICY_ROWS[:-1] + [("23.10.2026", "-")]
+        with self.assertRaises(ValueError):
+            fetch_funds.parse_policy_rate(policy_page(rows))
+
+    def test_rejects_an_impossible_date(self):
+        rows = POLICY_ROWS[:-1] + [("31.02.2026", "36.00")]
+        with self.assertRaises(ValueError):
+            fetch_funds.parse_policy_rate(policy_page(rows))
+
+
+class PolicyRateOnTest(unittest.TestCase):
+    CHANGES = [("2026-01-23", 37.0), ("2026-10-23", 36.0)]
+
+    def test_each_date_has_the_rate_in_effect(self):
+        dates = ["2026-01-22", "2026-01-23", "2026-10-22", "2026-10-23", "2026-11-12"]
+        self.assertEqual(
+            fetch_funds.policy_rate_on(self.CHANGES, dates),
+            {"2026-01-23": 37.0, "2026-10-22": 37.0, "2026-10-23": 36.0, "2026-11-12": 36.0},
+        )
+
+
+class RatesForTest(unittest.TestCase):
+    def test_one_rate_per_price_date(self):
+        known = {"2026-09-29": 1.0, "2026-09-30": 2.0, "2026-10-01": 3.0, "2026-10-02": 4.0}
+        self.assertEqual(fetch_funds.rates_for(DATES, known), [2.0, 3.0, 4.0])
+
+    def test_a_date_without_a_rate_takes_the_latest_earlier_one(self):
+        self.assertEqual(
+            fetch_funds.rates_for(DATES, {"2026-09-29": 1.0, "2026-10-01": 3.0}),
+            [1.0, 3.0, 3.0],
+        )
+
+    def test_but_not_one_that_is_too_old(self):
+        limit = fetch_funds.RATE_MAX_AGE_DAYS
+        day = date(2026, 10, 2)
+        at_limit = (day - timedelta(days=limit)).isoformat()
+        too_old = (day - timedelta(days=limit + 1)).isoformat()
+        self.assertEqual(fetch_funds.rates_for([day.isoformat()], {at_limit: 5.0}), [5.0])
+        self.assertEqual(fetch_funds.rates_for([day.isoformat()], {too_old: 5.0}), [None])
+
+    def test_no_rates_at_all(self):
+        self.assertEqual(fetch_funds.rates_for(DATES, {}), [None, None, None])
+        # A later rate is never used for an earlier date.
+        self.assertEqual(fetch_funds.rates_for(DATES, {"2026-10-03": 9.0}), [None, None, None])
+
+
+class ExistingRatesTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "funds.json"
+
+    def write(self, data):
+        self.path.write_text(data if isinstance(data, str) else json.dumps(data), encoding="utf-8")
+
+    def test_maps_each_rate_to_its_price_date(self):
+        self.write(
+            {
+                "priceDates": DATES,
+                "riskFreeRates": {"tlref": [40.0, None, 39.5], "policy": [37.0, 37.0, 36.0]},
+                "funds": [],
+            }
+        )
+        self.assertEqual(
+            fetch_funds.existing_rates(self.path),
+            {
+                "tlref": {DATES[0]: 40.0, DATES[2]: 39.5},
+                "policy": {DATES[0]: 37.0, DATES[1]: 37.0, DATES[2]: 36.0},
+            },
+        )
+
+    def test_a_file_without_usable_rates_has_none(self):
+        self.assertEqual(fetch_funds.existing_rates(self.path), {})  # no file
+        for data in [
+            "<html>oops</html>",
+            {"priceDates": DATES, "funds": []},
+            {"priceDates": DATES, "riskFreeRates": {"tlref": ["high", 1, 2]}},
+            {"priceDates": DATES, "riskFreeRates": [1, 2, 3]},
+            {"riskFreeRates": {"tlref": [1, 2, 3]}},
+            [],
+        ]:
+            with self.subTest(data=data):
+                self.write(data)
+                self.assertEqual(fetch_funds.existing_rates(self.path), {})
+
+
+class FetchRatesTest(unittest.TestCase):
+    """The two rate requests, with the network mocked."""
+
+    def setUp(self):
+        self.urlopen = mock.patch.object(fetch_funds.urllib.request, "urlopen").start()
+        mock.patch.object(fetch_funds.time, "sleep").start()
+        mock.patch.object(fetch_funds.sys, "stderr", io.StringIO()).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_tlref_is_a_get_request_for_the_given_days(self):
+        self.urlopen.return_value = response(json.dumps(tlref_response({"2026-10-01": 39.5})))
+        self.assertEqual(fetch_funds.fetch_tlref(200), {"2026-10-01": 39.5})
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertTrue(request.full_url.startswith("https://www.borsaistanbul.com/"))
+        self.assertTrue(request.full_url.endswith("&day=200"))
+        self.assertEqual(request.get_header("Referer"), fetch_funds.TLREF_PAGE_URL)
+
+    def test_the_policy_rate_is_a_get_request_for_the_tcmb_page(self):
+        self.urlopen.return_value = response(policy_page(POLICY_ROWS))
+        self.assertEqual(fetch_funds.fetch_policy_rate()[-1], ("2026-10-23", 36.0))
+        request = self.urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertEqual(request.full_url, fetch_funds.POLICY_RATE_URL)
+
+    def test_a_broken_response_is_retried_then_given_up(self):
+        self.urlopen.side_effect = lambda *args, **kwargs: response("<html>Request Rejected</html>")
+        for fetch_rate in [lambda: fetch_funds.fetch_tlref(200), fetch_funds.fetch_policy_rate]:
+            self.urlopen.reset_mock()
+            with self.assertRaises(RuntimeError):
+                fetch_rate()
+            self.assertEqual(self.urlopen.call_count, fetch_funds.RATE_ATTEMPTS)
+
+
+class RiskFreeRatesTest(unittest.TestCase):
+    TLREF = {"2026-09-29": 40.2, "2026-09-30": 40.1, "2026-10-01": 40.0}
+    CHANGES = [("2026-01-23", 37.0), ("2026-10-02", 36.0)]
+
+    def setUp(self):
+        self.fetch_tlref = mock.patch.object(fetch_funds, "fetch_tlref", return_value=self.TLREF).start()
+        self.fetch_policy_rate = mock.patch.object(
+            fetch_funds, "fetch_policy_rate", return_value=self.CHANGES
+        ).start()
+        self.stderr = mock.patch.object(fetch_funds.sys, "stderr", io.StringIO()).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def rates(self, existing=None):
+        return fetch_funds.risk_free_rates(DATES, 182, existing or {})
+
+    def test_a_rate_per_price_date_from_both_sources(self):
+        self.assertEqual(
+            self.rates(),
+            # The newest date has no TLREF yet and takes the day before's.
+            {"tlref": [40.1, 40.0, 40.0], "policy": [37.0, 37.0, 36.0]},
+        )
+        # TLREF is asked for from before the window's first date.
+        (days,), _ = self.fetch_tlref.call_args
+        self.assertGreater(days, 182)
+        self.assertEqual(self.stderr.getvalue(), "")
+
+    def test_fetched_rates_replace_the_existing_ones(self):
+        existing = {"tlref": {DATES[0]: 1.0, DATES[2]: 2.0}, "policy": {DATES[0]: 3.0}}
+        self.assertEqual(
+            self.rates(existing),
+            {"tlref": [40.1, 40.0, 2.0], "policy": [37.0, 37.0, 36.0]},
+        )
+
+    def test_a_source_that_fails_keeps_the_existing_rates(self):
+        existing = {
+            "tlref": {DATES[0]: 40.1, DATES[1]: 40.0},
+            "policy": {DATES[0]: 37.0, DATES[1]: 37.0},
+        }
+        expected = self.rates(existing)
+        for name, broken, error in [
+            ("tlref", self.fetch_tlref, RuntimeError("Could not fetch")),
+            ("policy", self.fetch_policy_rate, ValueError("no table")),
+            ("tlref", self.fetch_tlref, KeyError("date")),
+        ]:
+            with self.subTest(name=name, error=error):
+                self.stderr.seek(0)
+                self.stderr.truncate()
+                broken.side_effect = error
+                rates = self.rates(existing)
+                broken.side_effect = None
+                # The new date takes the latest earlier rate of the old file.
+                kept = existing[name]
+                self.assertEqual(rates[name], [kept[DATES[0]], kept[DATES[1]], kept[DATES[1]]])
+                other = "policy" if name == "tlref" else "tlref"
+                self.assertEqual(rates[other], expected[other])
+                self.assertIn(f"Keeping the earlier {name} rates", self.stderr.getvalue())
+
+    def test_no_source_and_no_existing_rates_gives_none(self):
+        self.fetch_tlref.side_effect = RuntimeError("down")
+        self.fetch_policy_rate.side_effect = RuntimeError("down")
+        self.assertEqual(
+            self.rates(), {"tlref": [None, None, None], "policy": [None, None, None]}
+        )
 
 
 def data_file(fetched_at, codes=("AAA",)):
@@ -675,9 +973,15 @@ class MainTest(unittest.TestCase):
             mock.patch("sys.argv", ["fetch_funds.py", str(self.output)]),
             mock.patch("sys.stdout", new_callable=io.StringIO),
             mock.patch("sys.stderr", new_callable=io.StringIO),
+            mock.patch.object(fetch_funds, "fetch_tlref", return_value=self.TLREF),
+            mock.patch.object(fetch_funds, "fetch_policy_rate", return_value=self.CHANGES),
         ]:
             patcher.start()
             self.addCleanup(patcher.stop)
+
+    TLREF = {DATES[0]: 40.1, DATES[1]: 40.0}
+    CHANGES = [("2026-01-23", 37.0), (DATES[2], 36.0)]
+    RATES = {"tlref": [40.1, 40.0, 40.0], "policy": [37.0, 37.0, 36.0]}
 
     def run_main(self, responses=None):
         responses = responses or [funds_response(), prices_response()]
@@ -692,6 +996,28 @@ class MainTest(unittest.TestCase):
         new = json.loads(self.output.read_text(encoding="utf-8"))
         self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
         self.assertEqual(codes_of(new["funds"]), CODES)
+
+    def test_writes_the_rates_for_the_price_dates(self):
+        self.run_main()
+        new = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(new["priceDates"], DATES)
+        self.assertEqual(new["riskFreeRates"], self.RATES)
+
+    def test_rates_that_cannot_be_fetched_do_not_stop_the_update(self):
+        self.run_main()
+        with mock.patch.object(fetch_funds, "fetch_tlref", side_effect=RuntimeError("down")), \
+                mock.patch.object(fetch_funds, "fetch_policy_rate", side_effect=ValueError("no table")):
+            # The rates of the file being replaced are kept.
+            self.run_main()
+            new = json.loads(self.output.read_text(encoding="utf-8"))
+            self.assertEqual(new["riskFreeRates"], self.RATES)
+            self.assertEqual(codes_of(new["funds"]), CODES)
+            # With no earlier file there are no rates, and still the fund data.
+            self.output.unlink()
+            self.run_main()
+            new = json.loads(self.output.read_text(encoding="utf-8"))
+            self.assertEqual(new["riskFreeRates"], {"tlref": [None] * 3, "policy": [None] * 3})
+            self.assertEqual(codes_of(new["funds"]), CODES)
 
     def test_a_second_run_on_the_same_day_keeps_previous(self):
         old = data_file("2026-10-27T07:15:00Z", ["OLD"])

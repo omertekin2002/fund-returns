@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
-import { coverageText, priceWindowText } from "../site/coverage.js";
+import { coverageText, dataCoverage, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
 import {
   committedPrevious,
@@ -25,10 +25,22 @@ const rows = (page) => page.locator("#funds tbody tr");
 const header = (page, key) => page.locator(`#header-row th.col-${key}`);
 
 // Opens the page (with an optional query string) and waits until the data has
-// been rendered.
-async function open(page, search = "") {
+// been rendered: `passingCount` funds pass (those of the committed data,
+// unless the spec serves other data).
+async function open(page, search = "", passingCount = passing.length) {
   await page.goto(`./${search}`);
-  await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+  await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passingCount)} funds pass`);
+}
+
+// What the page should show for a changed copy of the data. The rates behind
+// the risk-free return go with the price dates, so a copy with other dates
+// has other Sharpe ratios.
+function expectedFor(copy) {
+  const classified = classifyFunds(copy.funds, copy);
+  return {
+    passingCount: classified.filter((f) => !f.reason).length,
+    counts: dataCoverage(copy, classified).counts,
+  };
 }
 
 test("loads the data without errors", async ({ page }) => {
@@ -604,11 +616,12 @@ test.describe("price dates and coverage", () => {
       const errors = collectErrors(page);
       const copy = { ...data, priceDates: priceDatesValue };
       if (priceDatesValue === undefined) delete copy.priceDates;
+      const { passingCount, counts } = expectedFor(copy);
       await page.route("**/data/funds.json", (route) => route.fulfill({ json: copy }));
-      await open(page);
+      await open(page, "", passingCount);
       await expect(priceDates(page)).toHaveText("Price dates unknown");
-      await expect(sentence(page)).toHaveText(coverageText(coverage.counts));
-      await expect(rows(page)).toHaveCount(passing.length);
+      await expect(sentence(page)).toHaveText(coverageText(counts));
+      await expect(rows(page)).toHaveCount(passingCount);
       expect(errors).toEqual([]);
     });
   }
@@ -645,7 +658,7 @@ test.describe("price dates and coverage", () => {
     await page.setViewportSize({ width: 320, height: 800 });
     const copy = { ...data, priceDates: ["2025-12-15", ...data.priceDates.slice(1, -1), "2026-01-09"] };
     await page.route("**/data/funds.json", (route) => route.fulfill({ json: copy }));
-    await open(page);
+    await open(page, "", expectedFor(copy).passingCount);
     await expect(priceDates(page)).toHaveText(`Prices 15 Dec 2025 – 9 Jan 2026 (${copy.priceDates.length} days)`);
     const box = await priceDates(page).boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
@@ -990,7 +1003,7 @@ test.describe("changes since the previous update", () => {
 
   test("the summary and badges match the committed previous update", async ({ page }) => {
     test.skip(!committedPrevious, "no data/previous.json committed yet");
-    const committed = membershipChanges(funds, classifyFunds(committedPrevious.funds));
+    const committed = membershipChanges(funds, classifyFunds(committedPrevious.funds, committedPrevious));
     await open(page, "?view=all");
     await expect(summary(page)).toHaveText(changesSummary(committed, committedPrevious.fetchedAt));
     await expect(badges(page, "NEW")).toHaveCount(committed.entered.length);

@@ -57,6 +57,29 @@ test("classifyFunds works out Sharpe against the money market funds in the same 
   assert.equal(los.reason.rule, "min-sharpe");
 });
 
+test("classifyFunds uses the data file's rates for the risk-free return", () => {
+  // A fund that earns 0.15% a day, a little unevenly, beats money market
+  // funds earning 0.1% a day, but not a 73% rate (0.2% a day).
+  const days = 30;
+  const steady = pricesFrom(Array(days).fill(0.001));
+  const earning = pricesFrom(Array.from({ length: days }, (_, i) => (i % 2 ? 0.0014 : 0.0016)));
+  const list = [
+    fund("MM1", PASSING_RETURNS, { umbrella: RISK_FREE_UMBRELLA, prices: steady }),
+    fund("EAR", PASSING_RETURNS, { prices: earning }),
+  ];
+  const priceDates = Array.from({ length: days + 1 }, (_, i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10));
+  const rates = Array(days + 1).fill(73);
+  const sharpe = (data) => classifyFunds(list, data).find((f) => f.code === "EAR");
+  assert.ok(sharpe().sharpe > 1);
+  assert.equal(sharpe().reason, null);
+  assert.ok(sharpe({ priceDates }).sharpe > 1);
+  for (const riskFreeRates of [{ tlref: rates }, { policy: rates }]) {
+    const withRates = sharpe({ priceDates, riskFreeRates });
+    assert.ok(withRates.sharpe < 0);
+    assert.equal(withRates.reason.rule, "min-sharpe");
+  }
+});
+
 test("classifyFunds marks a ratio based on clearly less than the whole window", () => {
   const days = 100;
   const steady = pricesFrom(Array(days).fill(0.001));

@@ -367,7 +367,7 @@ async function init() {
     const data = await response.json();
     const days = recentCount(data.priceDates);
     state.fetchedAt = data.fetchedAt;
-    state.funds = classifyFunds(data.funds).map((fund) => ({
+    state.funds = classifyFunds(data.funds, data).map((fund) => ({
       ...fund,
       searchText: normalize(`${fund.code} ${fund.name} ${fund.umbrella}`),
       // Worked out once here, not on every render, so the All view stays fast.
@@ -455,7 +455,7 @@ async function loadChanges() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const previous = await response.json();
     if (!Array.isArray(previous?.funds)) throw new Error("no funds");
-    changes = membershipChanges(state.funds, classifyFunds(previous.funds));
+    changes = membershipChanges(state.funds, classifyFunds(previous.funds, previous));
     previousFetchedAt = previous.fetchedAt;
   } catch {
     if (state.changed) {

@@ -2,10 +2,13 @@
 // six months). A fund's "prices" list has one price (or null) per date in the
 // file's "priceDates".
 //
-// The risk-free return for each day is the median return of the money market
-// funds that day. It follows the market rate without being updated by hand,
-// and covers weekends and holidays, when money market funds earn several
-// days of interest at once.
+// The risk-free return for each day is the highest of three measures:
+// - TLREF, the Turkish lira overnight reference rate (Borsa İstanbul);
+// - the central bank's policy rate (the one-week repo rate);
+// - the median return of the steady money market funds that day.
+// The two rates come from the data file's "riskFreeRates" and accrue over the
+// calendar days between price dates, so all three cover weekends and
+// holidays, when money market funds earn several days of interest at once.
 
 export const RISK_FREE_UMBRELLA = "Para Piyasası Şemsiye Fonu";
 export const TRADING_DAYS_PER_YEAR = 252;
@@ -31,15 +34,71 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-// Median daily return of the money market funds, one per daily return.
-export function riskFreeReturns(funds) {
-  const series = funds
-    .filter((fund) => fund.umbrella === RISK_FREE_UMBRELLA)
-    .map((fund) => dailyReturns(fund.prices));
+// Median of the returns the funds have on each day.
+function medianReturns(series) {
   const days = Math.max(0, ...series.map((returns) => returns.length));
   return Array.from({ length: days }, (_, day) =>
     median(series.map((returns) => returns[day]).filter((r) => !isMissing(r))),
   );
+}
+
+// A money market fund is left out of the median when one of its daily returns
+// is above this many times that day's median of all money market funds.
+export const JUMP_FACTOR = 2;
+
+// Median daily return of the steady money market funds, one per daily return.
+// A fund with a negative daily return or a jump in the window (a write-down,
+// a unit split, a wrong price) is left out, so the median follows the funds
+// that only accrue interest.
+export function moneyMarketReturns(funds) {
+  const series = funds
+    .filter((fund) => fund.umbrella === RISK_FREE_UMBRELLA)
+    .map((fund) => dailyReturns(fund.prices));
+  const typical = medianReturns(series);
+  const steady = series.filter((returns) =>
+    returns.every((r, day) => isMissing(r) || (r >= 0 && r <= JUMP_FACTOR * typical[day])),
+  );
+  return medianReturns(steady);
+}
+
+const DAYS_PER_YEAR = 365;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const time = (date) => (typeof date === "string" ? Date.parse(`${date}T00:00:00Z`) : NaN);
+
+// The return an annual rate earns from each price date to the next. `rates`
+// has one rate in percent (or null) per price date; the rate on a date
+// accrues, without compounding, over the calendar days to the next date.
+export function rateReturns(rates, priceDates) {
+  if (!Array.isArray(rates) || !Array.isArray(priceDates)) return [];
+  return priceDates.slice(1).map((date, i) => {
+    const days = (time(date) - time(priceDates[i])) / MS_PER_DAY;
+    const rate = rates[i];
+    if (typeof rate !== "number" || !Number.isFinite(rate) || !(days > 0)) return null;
+    return ((rate / 100) * days) / DAYS_PER_YEAR;
+  });
+}
+
+// The three measures of the risk-free return, one list of daily returns each.
+// `data` is the data file: its "priceDates" and "riskFreeRates" ({ tlref,
+// policy }, annual rates in percent per price date). A file without them has
+// only the money market measure.
+export function riskFreeMeasures(funds, data) {
+  return {
+    tlref: rateReturns(data?.riskFreeRates?.tlref, data?.priceDates),
+    policy: rateReturns(data?.riskFreeRates?.policy, data?.priceDates),
+    moneyMarket: moneyMarketReturns(funds),
+  };
+}
+
+// The risk-free return for each day: the highest of the measures that have a
+// return that day, or null when none has.
+export function riskFreeReturns(funds, data) {
+  const measures = Object.values(riskFreeMeasures(funds, data));
+  const days = Math.max(0, ...measures.map((returns) => returns.length));
+  return Array.from({ length: days }, (_, day) => {
+    const returns = measures.map((measure) => measure[day]).filter((r) => !isMissing(r));
+    return returns.length ? Math.max(...returns) : null;
+  });
 }
 
 // A ratio worked out from fewer than this share of the window's daily returns

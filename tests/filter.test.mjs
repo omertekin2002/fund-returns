@@ -193,7 +193,7 @@ test("evidence: every rule is worked out after the first failure", () => {
 
 test("over the committed data, the reason is the first failing evidence entry", () => {
   const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
-  const funds = classifyFunds(data.funds);
+  const funds = classifyFunds(data.funds, data);
   assert.ok(funds.length > 0);
   for (const f of funds) {
     const entries = ruleEvidence(f);
