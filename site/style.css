@@ -183,10 +183,6 @@ h1 {
   background: var(--tint-olive);
 }
 
-.eyebrow-salmon {
-  background: var(--tint-salmon);
-}
-
 .ribbon-list {
   display: grid;
   gap: var(--space-md);

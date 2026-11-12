@@ -203,12 +203,12 @@ test.describe("URL state", () => {
   });
 
   test("keeps the path and the hash", async ({ page }) => {
-    await open(page, "?view=all#funds-title");
+    await open(page, "?view=all#criteria-title");
     await page.locator('[data-view="excluded"]').click();
     const url = new URL(page.url());
     expect(url.pathname).toBe("/");
     expect(url.search).toBe("?view=excluded");
-    expect(url.hash).toBe("#funds-title");
+    expect(url.hash).toBe("#criteria-title");
   });
 
   test("an invalid URL shows the default page without errors", async ({ page }) => {
