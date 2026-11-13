@@ -297,4 +297,12 @@ kept in and restored from the URL, and are dropped from the URL when
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
-wide.
+wide. [`e2e/a11y.spec.js`](e2e/a11y.spec.js) checks accessibility: it runs
+[axe-core](https://github.com/dequelabs/axe-core) (through
+`@axe-core/playwright`) with the WCAG 2.0 and 2.1 A and AA rules, plus the
+rules that keep all content inside landmarks under one `<main>`, and expects
+no violations in the Passing, Excluded and All views at 1280 px (with the
+changes summary and badges), the Passing view at 320 px, a search that
+matches nothing, stale data and a failed data request; and it tabs through
+every control on the page and checks that each one gets a focus outline
+with at least 3:1 contrast against the colour behind it.

@@ -4,7 +4,7 @@ name: Dell 1996 Analysis
 description: An inspired interpretation of Dell.com's 1996 design language — a catalog-era enterprise web design built around a literal black page frame, vivid flat color-block "ribbon cards" tinted in sage, salmon, periwinkle, sky, peach and lime, chunky Helvetica-Black display titles, Times Roman body copy, and an entire visual vocabulary of pre-Photoshop hand-cut GIF stickers (NEW! bursts, award seals, beveled product photos).
 
 colors:
-  primary: "#e91d2a"
+  primary: "#e71c29" # Dell red #e91d2a one shade darker, so white text on it meets WCAG AA (4.57:1; #e91d2a gives 4.49:1)
   on-primary: "#ffffff"
   canvas: "#ffffff"
   surface: "#ffffff"
@@ -361,7 +361,7 @@ The brand voice carries through in two anchors: a vivid Dell-red CTA panel on th
 ## Colors
 
 ### Brand & Accent
-- **Dell Red** (`{colors.primary}` — #e91d2a): The brand's signature red. Reserved for the homepage CTA panel ("At Dell.com, we'll help you find the right system…"), the top-right phone number, and the PC Magazine Readers' Choice seal ring. Never used as a card body fill.
+- **Dell Red** (`{colors.primary}` — #e71c29): The brand's signature red. The 1996 original is #e91d2a; this page uses the nearest darker shade, which looks the same, because white 14 px text on #e91d2a has 4.49:1 contrast, just under the WCAG AA minimum of 4.5:1 (#e71c29 gives 4.57:1). Reserved for the homepage CTA panel ("At Dell.com, we'll help you find the right system…"), the top-right phone number, and the PC Magazine Readers' Choice seal ring. Never used as a card body fill.
 - **Dell Yellow** (`{colors.yellow-sticker}` — #fcc20f): Sticker yellow — the "BUY a DELL" tab in the top banner, and the angled "NEW!" bursts overlapping new product rows.
 - **Dell Purple** (`{colors.purple-stripe}` — #6a26a4): The accent stripe behind the lowercase ".com" / "DELL" wordmark text — appears inside the "BUY a DELL" sticker chrome only.
 
@@ -371,7 +371,7 @@ The brand voice carries through in two anchors: a vivid Dell-red CTA panel on th
 
 ### Text
 - **Ink** (`{colors.ink}` — #000000): Body text, headings, link copy before visit. Pure black; no warm-near-black softening in 1996.
-- **Link** (`{colors.link}` — #0000ee): Classic Mosaic / Netscape 3.x default link blue. Underlined inline anchors ("Copyright", "(Terms of Use)", inline "from Dell's award-winning service and support teams").
+- **Link** (`{colors.link}` — #0000ee): Classic Mosaic / Netscape 3.x default link blue. Underlined inline anchors ("Copyright", "(Terms of Use)", inline "from Dell's award-winning service and support teams"). On a catalog tint (such as this page's sky change summary) links are `{colors.ink}`, still underlined, because #0000ee on the tints is under the 4.5:1 WCAG AA minimum for text.
 
 ### Ribbon-Card Tint Family
 Eight catalog colors, one per product line — these are the page's chromatic personality:
