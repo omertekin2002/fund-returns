@@ -3,7 +3,10 @@
    borders instead of soft shadows. Light only; the design has no dark mode. */
 
 :root {
-  --primary: #e91d2a;
+  /* DESIGN.md's Dell red (#e91d2a) a shade darker: white 14px text on it
+     (the status in the red rail block) needs 4.5:1 for WCAG AA, and #e91d2a
+     gives 4.49:1. #e71c29 gives 4.57:1 and looks the same. */
+  --primary: #e71c29;
   --on-primary: #ffffff;
   --canvas: #ffffff;
   --ink: #000000;
@@ -143,6 +146,12 @@ h1 {
   background: var(--tint-sky);
   color: var(--ink);
   font: 700 14px/1.3 var(--font-ui);
+}
+
+/* Ink, not link blue: #0000ee on the sky tint is under the 4.5:1 WCAG AA
+   minimum for text. The underline still marks them as links. */
+.changes-summary a {
+  color: var(--ink);
 }
 
 .changes-summary[hidden] {
