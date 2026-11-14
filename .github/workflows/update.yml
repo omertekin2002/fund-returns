@@ -8,7 +8,8 @@ on:
   schedule:
     - cron: "37 9 * * 1-5"
   workflow_dispatch:
-  # Pushes to main redeploy the site with the data already in the repo.
+  # Pushes to main redeploy the site with the data already in the repo, once
+  # the tests job below has passed.
   push:
     branches: [main]
 
@@ -118,9 +119,26 @@ jobs:
           gh issue comment "${{ steps.check.outputs.issue }}" --body-file "$RUNNER_TEMP/message.md"
           gh issue close "${{ steps.check.outputs.issue }}"
 
+  # On pushes to main (code changes), run the unit and page tests from
+  # test.yml before deploying. Data runs (schedule, workflow_dispatch) skip
+  # this: the committed-data tests need at least one passing fund, and a day
+  # with none is a valid result that must still be deployed.
+  tests:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test.yml
+
+  # Deploys when build succeeded and didn't skip itself, and tests passed or
+  # was skipped (data runs). `!cancelled()` lets this job run when tests was
+  # skipped; without it, a skipped job in `needs` would skip deploy too.
   deploy:
-    needs: build
-    if: needs.build.outputs.skip != 'true'
+    needs: [build, tests]
+    if: >-
+      !cancelled()
+      && needs.build.result == 'success'
+      && needs.build.outputs.skip != 'true'
+      && (needs.tests.result == 'success' || needs.tests.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       pages: write

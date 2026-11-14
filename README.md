@@ -179,13 +179,19 @@ The button is disabled until the data has loaded, and while no fund matches.
   usually a few hours late. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
   owner (see [Daily trigger](#daily-trigger-cron-joborg)). Pushes to `main`
-  redeploy the site without fetching. You can also run it by hand from the Actions tab
+  redeploy the site without fetching, after its `tests` job (the two jobs from
+  `test.yml`) passes. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
 - [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`
   and the page tests (`npm run test:e2e`, see
   [Local development](#local-development)) as two jobs on every pull request
-  and on every push to `main`, with read-only access to the repository. It
-  does not hold back the daily update or the deploy.
+  and on every push to `main`, with read-only access to the repository.
+  `update.yml` runs the same two jobs on a push to `main` and deploys only
+  after both pass, so a code change that breaks a test doesn't go live.
+  Data runs (the 10:15 trigger, the fallback schedule and manual runs) don't
+  run the tests, so they never hold back the daily update. That leaves a gap:
+  a pushed commit whose tests failed is still deployed by the next data run,
+  unless it is fixed or reverted first.
 
 The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
 black page frame, flat colour blocks, Arial Black headings over Times body).
@@ -297,4 +303,12 @@ kept in and restored from the URL, and are dropped from the URL when
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
-wide.
+wide. [`e2e/a11y.spec.js`](e2e/a11y.spec.js) checks accessibility: it runs
+[axe-core](https://github.com/dequelabs/axe-core) (through
+`@axe-core/playwright`) with the WCAG 2.0 and 2.1 A and AA rules, plus the
+rules that keep all content inside landmarks under one `<main>`, and expects
+no violations in the Passing, Excluded and All views at 1280 px (with the
+changes summary and badges), the Passing view at 320 px, a search that
+matches nothing, stale data and a failed data request; and it tabs through
+every control on the page and checks that each one gets a focus outline
+with at least 3:1 contrast against the colour behind it.
