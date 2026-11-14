@@ -2,11 +2,13 @@ name: Tests
 
 # Runs `npm test` (the filter, Sharpe ratio and fetch script tests) and
 # `npm run test:e2e` (the page in headless Chromium) on every pull request and
-# on pushes to main. It only reads the repository.
+# on pushes to main. update.yml also calls it on pushes to main, so that a code
+# change is deployed only after both jobs pass. It only reads the repository.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
