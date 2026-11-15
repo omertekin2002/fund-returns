@@ -1,11 +1,13 @@
 // Run with: npm run test:e2e
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
+import { withOnePassingFund, withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 import {
+  committedData,
   committedPrevious,
   coverage,
   data,
@@ -968,7 +970,8 @@ test.describe("changes since the previous update", () => {
       const released = new Promise((resolve) => {
         release = resolve;
       });
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", async (route) => {
         await released;
         await route.fulfill({ json: previous });
@@ -1017,7 +1020,8 @@ test.describe("changes since the previous update", () => {
   test("a broken previous update is ignored without errors", async ({ page }) => {
     for (const body of ["not json", "[]", '{"funds": 5}']) {
       const errors = collectErrors(page);
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", (route) => route.fulfill({ contentType: "application/json", body }));
       await open(page);
       await page.waitForLoadState("networkidle");
@@ -1036,7 +1040,8 @@ test.describe("changes since the previous update", () => {
       const label = `${response.status ?? 200} ${response.body}`;
       const errors = collectErrors(page);
       let requested = false;
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", (route) => {
         requested = true;
         return route.fulfill(response);
@@ -1145,12 +1150,17 @@ test.describe("CSV download", () => {
   });
 
   test("follows the search and the risk filter, and the Passing view has no Reason column", async ({ page }) => {
-    // The risk level with the most passing funds, so the file has rows whatever
-    // the day's data; most fund names contain "PORTFÖY" (searched lower-case).
-    const counts = new Map();
-    for (const f of passing) if (f.risk) counts.set(f.risk, (counts.get(f.risk) ?? 0) + 1);
-    const risk = String([...counts].sort((a, b) => b[1] - a[1])[0][0]);
+    // The risk level with the most passing funds the search matches, so the
+    // file has rows whatever the day's data; most fund names contain "PORTFÖY"
+    // (searched lower-case), and so do the funds expected.js makes pass.
     const query = "portföy";
+    const counts = new Map();
+    for (const f of passing) {
+      if (f.risk && normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(query)) {
+        counts.set(f.risk, (counts.get(f.risk) ?? 0) + 1);
+      }
+    }
+    const risk = String([...counts].sort((a, b) => b[1] - a[1])[0][0]);
     await open(page, `?q=${encodeURIComponent(query)}&risk=${risk}`);
     const expected = filtered({ risk }).passing.filter((f) =>
       normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(query),
@@ -1198,12 +1208,14 @@ test.describe("CSV download", () => {
   });
 
   test("is disabled while no fund matches, and before the data loads", async ({ page }) => {
-    await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
+    const fail = (route) => route.fulfill({ status: 500, body: "" });
+    await page.route("**/data/funds.json", fail);
     await page.goto("./");
     await expect(page.locator("#pass-sticker")).toHaveText("No data");
     await expect(button(page)).toBeDisabled();
 
-    await page.unrouteAll();
+    // Back to the data fixtures.js serves.
+    await page.unroute("**/data/funds.json", fail);
     await open(page);
     await expect(button(page)).toBeEnabled();
     await page.locator("#search").fill("no fund is called this");
@@ -1282,4 +1294,81 @@ test.describe("Sharpe ratios based on less than six months", () => {
     await expect(cell(page, short[0].code).locator(".sharpe-note")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
+});
+
+// The specs above serve data in which some funds always pass (see
+// fixtures.js). These check the page on the committed data as it is, and on
+// days when no fund or a single fund passes: the counts are the ones
+// filter.js works out, and nothing breaks.
+test.describe("whatever the day's data", () => {
+  const collectErrors = (page) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    return errors;
+  };
+
+  for (const [name, fundsData, passingCount] of [
+    ["the committed data as it is", null, null],
+    ["a day when no fund passes", withoutPassingFunds(committedData), 0],
+    ["a day when one fund passes", withOnePassingFund(committedData).data, 1],
+  ]) {
+    test.describe(`on ${name}`, () => {
+      test.use({ fundsData });
+      const all = classifyFunds((fundsData ?? committedData).funds);
+      const passing = all.filter((f) => !f.reason);
+      const excluded = all.filter((f) => f.reason);
+
+      if (passingCount !== null) {
+        test(`the data has ${passingCount} passing ${passingCount === 1 ? "fund" : "funds"}`, () => {
+          expect(passing).toHaveLength(passingCount);
+        });
+      }
+
+      test("shows the counts, rows and changes worked out from it, without errors", async ({ page }) => {
+        const errors = collectErrors(page);
+        await page.goto("./?view=passing");
+        await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+        await expect(page.locator("#status")).toContainText(
+          `all ${formatCount(all.length)} funds traded on TEFAS are checked against six rules. ` +
+            `${formatCount(passing.length)} pass all six`,
+        );
+        await expect(page.locator('[data-count="passing"]')).toHaveText(formatCount(passing.length));
+        await expect(page.locator('[data-count="excluded"]')).toHaveText(formatCount(excluded.length));
+        await expect(page.locator('[data-count="all"]')).toHaveText(formatCount(all.length));
+        await expect(page.locator("#rules li strong")).toHaveText(
+          RULES.map((rule) => `${formatCount(excluded.filter((f) => f.reason.rule === rule.id).length)} funds out.`),
+        );
+        await expect(rows(page)).toHaveCount(passing.length);
+        if (passing.length === 0) {
+          await expect(page.locator("#empty")).toBeVisible();
+          await expect(page.locator("#download-csv")).toBeDisabled();
+        } else {
+          await expect(page.locator("#empty")).toBeHidden();
+          await expect(page.locator("#download-csv")).toBeEnabled();
+        }
+
+        await page.locator('[data-view="excluded"]').click();
+        await expect(rows(page)).toHaveCount(excluded.length);
+        await expect(page.locator("#funds tbody td.col-reason:empty")).toHaveCount(0);
+
+        // The committed previous update, compared with this data.
+        if (committedPrevious) {
+          const changes = membershipChanges(all, classifyFunds(committedPrevious.funds));
+          await expect(page.locator("#changes")).toHaveText(changesSummary(changes, committedPrevious.fetchedAt));
+          await page.locator('[data-view="all"]').click();
+          await expect(rows(page)).toHaveCount(all.length);
+          await expect(page.locator("#funds tbody td.col-code .badge", { hasText: "NEW" })).toHaveCount(
+            changes.entered.length,
+          );
+          await expect(page.locator("#funds tbody td.col-code .badge", { hasText: "LEFT" })).toHaveCount(
+            changes.left.length - changes.gone.length,
+          );
+        }
+        expect(errors).toEqual([]);
+      });
+    });
+  }
 });

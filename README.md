@@ -263,7 +263,8 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
-ratio, price line, data freshness, coverage, URL state, changes and CSV tests
+ratio, price line, data freshness, coverage, URL state, changes, CSV and
+data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
@@ -276,7 +277,21 @@ and no packages.
 `npx playwright install chromium` once, then `npm run test:e2e`. They serve
 `site/` on `http://127.0.0.1:8137` and open it in headless Chromium with
 [Playwright](https://playwright.dev), using the committed
-`site/data/funds.json`. The specs in [`e2e/`](e2e/) check that the page loads
+`site/data/funds.json` with four more funds made to pass (see
+[`e2e/fixtures.js`](e2e/fixtures.js)).
+
+Neither suite depends on how many funds pass on the committed day, which
+swings with the market and can be none. Checks that need passing funds use
+data built from the committed file by
+[`tests/fund-fixtures.mjs`](tests/fund-fixtures.mjs), in which some funds
+always pass; checks over the committed file as it is only assert what holds
+on any day (each fund's reason is its first failing rule, and the page shows
+the counts `filter.js` works out). Both suites also check the rules, the
+changes, coverage and CSV logic, and the page itself (counts, rows, change
+summary, no errors, and axe in the empty Passing view) on copies of the
+committed data in which no fund passes, or exactly one does.
+
+The specs in [`e2e/`](e2e/) check that the page loads
 without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
 `sharpe.js`; that the table lists the right rows (with a Reason column only

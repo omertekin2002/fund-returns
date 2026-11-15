@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { classifyFunds } from "../site/changes.js";
 import { exclusionReason, RULES, ruleEvidence } from "../site/filter.js";
+import { withOnePassingFund, withoutPassingFunds, withPassingFunds } from "./fund-fixtures.mjs";
 
 const fund = (returns) => ({
   code: "TST",
@@ -191,9 +192,11 @@ test("evidence: every rule is worked out after the first failure", () => {
   ]);
 });
 
-test("over the committed data, the reason is the first failing evidence entry", () => {
-  const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
-  const funds = classifyFunds(data.funds);
+const committed = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
+
+// Every fund's reason is its first failing evidence entry, and it passes
+// exactly when no entry fails.
+function assertReasonsMatchEvidence(funds) {
   assert.ok(funds.length > 0);
   for (const f of funds) {
     const entries = ruleEvidence(f);
@@ -203,7 +206,34 @@ test("over the committed data, the reason is the first failing evidence entry", 
     const passes = entries.every((e) => e.outcome !== "fail");
     assert.equal(f.reason === null, passes, f.code);
   }
-  // The data has passing and excluded funds, and funds without a Sharpe ratio.
+}
+
+// Holds on any day's data, however many funds pass.
+test("over the committed data, the reason is the first failing evidence entry", () => {
+  assertReasonsMatchEvidence(classifyFunds(committed.funds));
+});
+
+test("over data with passing funds, passing and excluded funds match their evidence", () => {
+  const funds = classifyFunds(withPassingFunds(committed).data.funds);
+  assertReasonsMatchEvidence(funds);
   assert.ok(funds.some((f) => !f.reason));
   assert.ok(funds.some((f) => f.reason));
+});
+
+test("on a day when no fund passes, every fund's reason is its first failing evidence entry", () => {
+  const funds = classifyFunds(withoutPassingFunds(committed).funds);
+  assertReasonsMatchEvidence(funds);
+  assert.equal(funds.filter((f) => !f.reason).length, 0);
+  // Rule 1 is checked first, so it is every fund's reason.
+  assert.ok(funds.every((f) => f.reason.rule === "min-1m"));
+});
+
+test("on a day when one fund passes, every fund's reason is its first failing evidence entry", () => {
+  const { data, codes } = withOnePassingFund(committed);
+  const funds = classifyFunds(data.funds);
+  assertReasonsMatchEvidence(funds);
+  assert.deepEqual(
+    funds.filter((f) => !f.reason).map((f) => f.code),
+    codes,
+  );
 });
