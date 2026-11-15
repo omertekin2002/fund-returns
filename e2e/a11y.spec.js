@@ -2,9 +2,10 @@
 // the page can be in, and a keyboard walk that checks every focusable control
 // gets a focus outline that stands out from what is behind it.
 // Run with: npm run test:e2e (or npx playwright test e2e/a11y.spec.js)
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import AxeBuilder from "@axe-core/playwright";
-import { data, formatCount, passing, previousData } from "./expected.js";
+import { committedData, data, formatCount, passing, previousData } from "./expected.js";
+import { withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 
 // The WCAG 2.0 and 2.1 A and AA rules, plus the best-practice rules that keep
 // every piece of content inside a landmark and give the page one <main>.
@@ -98,6 +99,21 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
     await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
     await page.goto("./");
     await expect(page.locator("#status")).toHaveText("Could not load fund data: HTTP 500");
+    await expectNoViolations(page);
+  });
+});
+
+// The other checks serve data in which some funds always pass (see
+// fixtures.js); this one a day when none does, with the committed previous
+// update, so the Passing view is empty and the summary lists funds that left.
+test.describe("axe on a day when no fund passes", () => {
+  test.use({ fundsData: withoutPassingFunds(committedData) });
+
+  test("finds no violations in the empty Passing view", async ({ page }) => {
+    await page.goto("./");
+    await expect(page.locator("#pass-sticker")).toHaveText("0 funds pass");
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.locator("#empty")).toBeVisible();
     await expectNoViolations(page);
   });
 });
