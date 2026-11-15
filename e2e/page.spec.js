@@ -97,7 +97,7 @@ test("search narrows the table, and says when nothing matches", async ({ page })
   await page.locator("#search").fill("no fund is called this");
   await expect(rows(page)).toHaveCount(0);
   await expect(page.locator("#empty")).toBeVisible();
-  await expect(page.locator("#empty")).toHaveText("No funds match.");
+  await expect(page.locator("#empty-message")).toHaveText('No funds match the search "no fund is called this".');
 });
 
 test("clicking a column header sorts by it, and clicking again reverses", async ({ page }) => {
@@ -947,8 +947,12 @@ test.describe("changes since the previous update", () => {
       const unchanged = passing.find((f) => !changes.entered.includes(f.code));
       await page.locator("#search").fill(unchanged.code);
       await expect(rows(page)).toHaveCount(0);
-      await expect(page.locator("#empty")).toHaveText("No funds match.");
+      await expect(page.locator("#empty-message")).toHaveText(
+        `No funds match the type "${fund.umbrella}", risk ${fund.risk}, ` +
+          `the change filter "Entered the passing list" and the search "${unchanged.code}".`,
+      );
       await expect(page.locator("#empty")).toBeVisible();
+      await expect(page.locator("#clear-filters")).toBeVisible();
       await expect(page.locator("#download-csv")).toBeDisabled();
     });
 
@@ -1055,6 +1059,136 @@ test.describe("changes since the previous update", () => {
       await expectCounts(page, { passing: passing.length, excluded: excluded.length });
       expect(errors.filter((text) => !text.startsWith("Failed to load resource")), label).toEqual([]);
     }
+  });
+});
+
+test.describe("the empty table", () => {
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+  const message = (page) => page.locator("#empty-message");
+  const button = (page) => page.locator("#clear-filters");
+  const type = umbrellas[0];
+  // The type, risk and search narrow the Excluded view, sorted by Sharpe, to
+  // nothing.
+  const narrowed = `?view=excluded&sort=sharpe&dir=asc&type=${encodeURIComponent(type)}&risk=1&q=zzzz`;
+  const narrowedText = `No funds match the type "${type}", risk 1 and the search "zzzz".`;
+
+  // After a reset: the view and sort stay, the filters and search are clear.
+  async function expectCleared(page) {
+    await expect(rows(page)).toHaveCount(excluded.length);
+    await expect(page.locator("#empty")).toBeHidden();
+    await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(header(page, "sharpe")).toHaveAttribute("aria-sort", "ascending");
+    await expect(page.locator("#type-filter")).toHaveValue("");
+    await expect(page.locator("#risk-filter")).toHaveValue("");
+    await expect(page.locator("#search")).toHaveValue("");
+    await expect.poll(() => params(page)).toEqual({ view: "excluded", sort: "sharpe", dir: "asc" });
+    await expect(page.locator("#search")).toBeFocused();
+    await expect(page.locator("#search")).toBeVisible();
+  }
+
+  test("names exactly the filters and search that leave no fund, with a reset button", async ({ page }) => {
+    await open(page, narrowed);
+    await expect(rows(page)).toHaveCount(0);
+    await expect(message(page)).toHaveText(narrowedText);
+    await expect(button(page)).toBeVisible();
+    await expect(button(page)).toHaveText("Clear filters and search");
+
+    // Only the ones that are set.
+    await page.locator("#risk-filter").selectOption("");
+    await expect(message(page)).toHaveText(`No funds match the type "${type}" and the search "zzzz".`);
+    await page.locator("#type-filter").selectOption("");
+    await expect(message(page)).toHaveText('No funds match the search "zzzz".');
+    await page.locator("#search").fill("");
+    await expect(page.locator("#empty")).toBeHidden();
+  });
+
+  test("names a risk level that leaves no fund of a type", async ({ page }) => {
+    // A type and risk level with excluded funds but no passing ones.
+    const combo = umbrellas
+      .flatMap((umbrella) => ["1", "2", "3", "4", "5", "6", "7"].map((risk) => ({ type: umbrella, risk })))
+      .find((c) => filtered(c).passing.length === 0 && filtered(c).excluded.length > 0);
+    expect(combo).toBeDefined();
+    await open(page, `?type=${encodeURIComponent(combo.type)}&risk=${combo.risk}`);
+    await expect(rows(page)).toHaveCount(0);
+    await expect(message(page)).toHaveText(`No funds match the type "${combo.type}" and risk ${combo.risk}.`);
+    await expect(button(page)).toBeVisible();
+  });
+
+  test("the button clears the filters and search, keeping the view and sort", async ({ page }) => {
+    await open(page, narrowed);
+    await button(page).click();
+    await expectCleared(page);
+  });
+
+  for (const key of ["Enter", "Space"]) {
+    test(`the button works from the keyboard with ${key}`, async ({ page }) => {
+      await open(page, narrowed);
+      await button(page).focus();
+      await page.keyboard.press(key);
+      await expectCleared(page);
+    });
+  }
+
+  test("names and clears the change filter once the changes have loaded", async ({ page }) => {
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previousData().previous }));
+    await open(page, "?changed=entered&q=zzzz");
+    await expect(page.locator("#change-filter")).toBeVisible();
+    await expect(message(page)).toHaveText(
+      'No funds match the change filter "Entered the passing list" and the search "zzzz".',
+    );
+    await button(page).click();
+    await expect(page.locator("#change-filter")).toHaveValue("");
+    await expect(rows(page)).toHaveCount(passing.length);
+    await expect.poll(() => params(page)).toEqual({});
+    await expect(page.locator("#search")).toBeFocused();
+  });
+
+  test("shows the search as text, never as HTML", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const query = '<img src=x onerror="window.injected=1">';
+    await open(page, `?q=${encodeURIComponent(query)}`);
+    await expect(message(page)).toHaveText(`No funds match the search "${query}".`);
+    await expect(page.locator("#empty img")).toHaveCount(0);
+    expect(await page.evaluate(() => window.injected)).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  test("fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    const longType = [...umbrellas].sort((a, b) => b.length - a.length)[0];
+    await open(page, `?type=${encodeURIComponent(longType)}&risk=1&q=${"averylongsearchwithoutspaces".repeat(3)}`);
+    await expect(button(page)).toBeVisible();
+    for (const locator of [message(page), button(page)]) {
+      const box = await locator.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    expect((await button(page).boundingBox()).height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
+test.describe("on a day when no fund passes, the empty Passing view", () => {
+  test.use({ fundsData: withoutPassingFunds(committedData) });
+
+  test("says no fund passes all six rules, without a reset button, even with filters", async ({ page }) => {
+    await page.goto("./");
+    await expect(page.locator("#pass-sticker")).toHaveText("0 funds pass");
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+    await expect(page.locator("#empty")).not.toContainText("No funds match");
+    await expect(page.locator("#clear-filters")).toBeHidden();
+
+    await page.locator("#risk-filter").selectOption("6");
+    await page.locator("#search").fill("zzzz");
+    await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+    await expect(page.locator("#clear-filters")).toBeHidden();
+
+    // The Excluded view lists funds, so there the filters are named.
+    await page.locator('[data-view="excluded"]').click();
+    await expect(page.locator("#empty-message")).toHaveText('No funds match risk 6 and the search "zzzz".');
+    await expect(page.locator("#clear-filters")).toBeVisible();
   });
 });
 
@@ -1344,6 +1478,8 @@ test.describe("whatever the day's data", () => {
         await expect(rows(page)).toHaveCount(passing.length);
         if (passing.length === 0) {
           await expect(page.locator("#empty")).toBeVisible();
+          await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+          await expect(page.locator("#clear-filters")).toBeHidden();
           await expect(page.locator("#download-csv")).toBeDisabled();
         } else {
           await expect(page.locator("#empty")).toBeHidden();

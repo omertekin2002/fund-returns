@@ -477,6 +477,16 @@ td.col-sparkline {
   text-align: center;
 }
 
+.empty p {
+  margin: 0;
+  /* A long search or fund type wraps instead of running off a 320px screen. */
+  overflow-wrap: anywhere;
+}
+
+.empty .button-secondary {
+  margin-top: var(--space-lg);
+}
+
 /* ─── Footer ─── */
 
 .footer-band {
