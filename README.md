@@ -19,6 +19,21 @@ so links can be shared (see [`site/urlstate.js`](site/urlstate.js)). A type
 that matches no fund, a risk outside 1–7, or a `changed` other than `entered`
 or `left` is ignored.
 
+When the table has no rows, the line under it says why (see
+[`site/empty.js`](site/empty.js)):
+
+- If the view lists no fund at all in the data, whatever the filters and
+  search, it says so, e.g. "No fund passes all six rules in the latest data."
+  in the Passing view on a day when no fund passes. Clearing the filters
+  wouldn't help, so there is no button.
+- Otherwise it names each filter and the search that leave no fund, in the
+  order of the controls, e.g. `No funds match the type "Hisse Senedi Şemsiye
+  Fonu", risk 6 and the search "ata".`, with a **Clear filters and search**
+  button. The button clears the type, risk and change filters and the search,
+  keeps the view and sort, updates the URL and moves focus to the search box.
+  A change filter from the URL that isn't applied yet (before `previous.json`
+  has loaded) is not named.
+
 ## Criteria
 
 A fund is shown only if it breaks none of these rules:
@@ -36,6 +51,19 @@ A fund is shown only if it breaks none of these rules:
 
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
+
+Each rule card under **The Criteria** ends with how many funds that rule
+excludes first, e.g. "212 funds out here first." (or "1 fund out here first."
+and "No funds out here first."). These are first failures, not independent
+failure totals: an excluded fund is counted once, under the first rule it
+breaks (the one its Reason column names), so a fund that breaks rules 1, 5 and
+6 is counted only under rule 1, and the later rules' counts (rule 6 in
+particular) are lower than the number of funds that break them. The counts add
+up to the excluded funds, and a line under the heading says so with the total
+from the data, e.g. "Each excluded fund is counted once, under the first rule
+it breaks, so the cards add up to the 965 excluded funds." Like the cards, it
+counts every fund, whatever the view, filters or search. Both are worded by
+[`site/rulecounts.js`](site/rulecounts.js).
 
 ## Changes since the last update
 
@@ -263,7 +291,8 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
-ratio, price line, data freshness, coverage, URL state, changes and CSV tests
+ratio, price line, data freshness, coverage, URL state, changes, CSV, empty
+table message, rule card count and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
@@ -276,14 +305,34 @@ and no packages.
 `npx playwright install chromium` once, then `npm run test:e2e`. They serve
 `site/` on `http://127.0.0.1:8137` and open it in headless Chromium with
 [Playwright](https://playwright.dev), using the committed
-`site/data/funds.json`. The specs in [`e2e/`](e2e/) check that the page loads
+`site/data/funds.json` with four more funds made to pass (see
+[`e2e/fixtures.js`](e2e/fixtures.js)).
+
+Neither suite depends on how many funds pass on the committed day, which
+swings with the market and can be none. Checks that need passing funds use
+data built from the committed file by
+[`tests/fund-fixtures.mjs`](tests/fund-fixtures.mjs), in which some funds
+always pass; checks over the committed file as it is only assert what holds
+on any day (each fund's reason is its first failing rule, and the page shows
+the counts `filter.js` works out). Both suites also check the rules, the
+changes, coverage and CSV logic, and the page itself (counts, rows, change
+summary, no errors, and axe in the empty Passing view) on copies of the
+committed data in which no fund passes, or exactly one does.
+
+The specs in [`e2e/`](e2e/) check that the page loads
 without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
-`sharpe.js`; that the table lists the right rows (with a Reason column only
+`sharpe.js`, worded as first failures (e.g. "212 funds out here first."), and
+that the line under The Criteria gives the Excluded count as the total the
+cards add up to and fits a 320 px screen; that the table lists the right rows (with a Reason column only
 for excluded funds); that search and column sorting work, and are kept in
 and restored from the URL; that every fund with two prices has a labelled
 4-week price line (and the rest show `—`), and that its column can't be
-sorted; that the type and risk filters list the types in
+sorted; that an empty table says no fund passes all six rules when none does
+(without a button), or names exactly the filters and search that leave no
+fund, shown as text and fitting a 320 px screen, with a button that clears
+them from the mouse or keyboard, keeping the view and sort, and clears them
+from the URL; that the type and risk filters list the types in
 the data, narrow the rows and view counts (but not the sticker or rule
 cards), work from the keyboard and at 320 px wide, and are kept in and
 restored from the URL, with unknown values ignored; that the banner's price dates and the coverage sentence match what
@@ -309,6 +358,8 @@ wide. [`e2e/a11y.spec.js`](e2e/a11y.spec.js) checks accessibility: it runs
 rules that keep all content inside landmarks under one `<main>`, and expects
 no violations in the Passing, Excluded and All views at 1280 px (with the
 changes summary and badges), the Passing view at 320 px, a search that
-matches nothing, stale data and a failed data request; and it tabs through
-every control on the page and checks that each one gets a focus outline
-with at least 3:1 contrast against the colour behind it.
+matches nothing, filters and a search that leave no fund (with the button that
+clears them), stale data and a failed data request; and it tabs through
+every control on the page, with rows and with the clear button showing, and
+checks that each one gets a focus outline with at least 3:1 contrast against
+the colour behind it.

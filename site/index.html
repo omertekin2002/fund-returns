@@ -67,7 +67,12 @@
           <tbody></tbody>
         </table>
       </div>
-      <p id="empty" class="empty" hidden>No funds match.</p>
+      <!-- Filled by app.js when the table has no rows: why, and a button that
+           clears the filters and search when they are the reason. -->
+      <div id="empty" class="empty" hidden>
+        <p id="empty-message"></p>
+        <button id="clear-filters" type="button" class="button-secondary" hidden>Clear filters and search</button>
+      </div>
     </section>
 
     <div class="about">
@@ -89,6 +94,8 @@
 
       <section class="criteria" aria-labelledby="criteria-title">
         <h2 id="criteria-title" class="eyebrow eyebrow-olive">The Criteria</h2>
+        <!-- Filled by app.js once the data has loaded. -->
+        <p id="rules-note" class="criteria-note" hidden></p>
         <ol id="rules" class="ribbon-list"></ol>
       </section>
     </div>

@@ -2,9 +2,10 @@
 // the page can be in, and a keyboard walk that checks every focusable control
 // gets a focus outline that stands out from what is behind it.
 // Run with: npm run test:e2e (or npx playwright test e2e/a11y.spec.js)
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import AxeBuilder from "@axe-core/playwright";
-import { data, formatCount, passing, previousData } from "./expected.js";
+import { committedData, data, formatCount, passing, previousData } from "./expected.js";
+import { withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 
 // The WCAG 2.0 and 2.1 A and AA rules, plus the best-practice rules that keep
 // every piece of content inside a landmark and give the page one <main>.
@@ -38,17 +39,17 @@ async function expectNoViolations(page) {
 const rows = (page) => page.locator("#funds tbody tr");
 
 // Opens the page and waits until the data has been rendered.
-async function open(page) {
-  await page.goto("./");
+async function open(page, search = "") {
+  await page.goto(`./${search}`);
   await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
 }
 
 // Opens the page with a previous update, so the change summary, the change
 // filter and the NEW / LEFT badges show.
-async function openWithChanges(page) {
+async function openWithChanges(page, search = "") {
   const { previous } = previousData();
   await page.route("**/data/previous.json", (route) => route.fulfill({ json: previous }));
-  await open(page);
+  await open(page, search);
   await expect(page.locator("#changes")).toBeVisible();
   await expect(page.locator("#change-filter")).toBeVisible();
 }
@@ -87,6 +88,16 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
     await expectNoViolations(page);
   });
 
+  test("when the filters and search leave no fund, with the button that clears them", async ({ page }) => {
+    await openWithChanges(page);
+    await page.locator("#risk-filter").selectOption("1");
+    await page.locator("#change-filter").selectOption("entered");
+    await page.locator("#search").fill("no fund is called this");
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.locator("#clear-filters")).toBeVisible();
+    await expectNoViolations(page);
+  });
+
   test("when the data is out of date", async ({ page }) => {
     await page.clock.setFixedTime(new Date(new Date(data.fetchedAt).getTime() + 7 * 24 * 60 * 60 * 1000));
     await open(page);
@@ -98,6 +109,22 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
     await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
     await page.goto("./");
     await expect(page.locator("#status")).toHaveText("Could not load fund data: HTTP 500");
+    await expectNoViolations(page);
+  });
+});
+
+// The other checks serve data in which some funds always pass (see
+// fixtures.js); this one a day when none does, with the committed previous
+// update, so the Passing view is empty and the summary lists funds that left.
+test.describe("axe on a day when no fund passes", () => {
+  test.use({ fundsData: withoutPassingFunds(committedData) });
+
+  test("finds no violations in the empty Passing view", async ({ page }) => {
+    await page.goto("./");
+    await expect(page.locator("#pass-sticker")).toHaveText("0 funds pass");
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.locator("#empty")).toBeVisible();
+    await expect(page.locator("#clear-filters")).toBeHidden();
     await expectNoViolations(page);
   });
 });
@@ -125,12 +152,10 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-test("every focusable control shows a focus outline with 3:1 contrast against what is behind it", async ({
-  page,
-}) => {
-  // A previous update adds the change filter and the summary's links.
-  await openWithChanges(page);
-
+// Tabs through the page and checks that it reaches every visible control,
+// including one of each `selectors`, and that each gets a focus outline with
+// 3:1 contrast against the colour behind it.
+async function expectFocusOutlines(page, selectors) {
   // The controls a keyboard user should reach, in any order.
   const expected = await page.evaluate(() =>
     [...document.querySelectorAll("a[href], button, select, input")]
@@ -177,18 +202,7 @@ test("every focusable control shows a focus outline with 3:1 contrast against wh
   // Tab reached every control, and those include every kind the page has.
   const reached = seen.map((s) => s.html);
   expect([...reached].sort()).toEqual([...expected].sort());
-  for (const selector of [
-    "[data-view]",
-    "#type-filter",
-    "#risk-filter",
-    "#change-filter",
-    "#search",
-    "#download-csv",
-    "#header-row button",
-    "#funds tbody td.col-code a",
-    "#changes a",
-    ".footer-band a",
-  ]) {
+  for (const selector of selectors) {
     const html = await page.locator(selector).first().evaluate((el) => el.outerHTML);
     expect(reached, `${selector} is reached with Tab`).toContain(html);
   }
@@ -208,4 +222,30 @@ test("every focusable control shows a focus outline with 3:1 contrast against wh
       contrast: Math.round(contrast(s.outlineColor, s.background) * 100) / 100,
     }));
   expect(problems).toEqual([]);
+}
+
+const CONTROLS = [
+  "[data-view]",
+  "#type-filter",
+  "#risk-filter",
+  "#change-filter",
+  "#search",
+  "#header-row button",
+  "#changes a",
+  ".footer-band a",
+];
+
+test("every focusable control shows a focus outline with 3:1 contrast against what is behind it", async ({
+  page,
+}) => {
+  // A previous update adds the change filter and the summary's links.
+  await openWithChanges(page);
+  await expectFocusOutlines(page, [...CONTROLS, "#download-csv", "#funds tbody td.col-code a"]);
+});
+
+test("the button that clears the filters and search shows a focus outline too", async ({ page }) => {
+  // Opened with the search in the URL, so Tab starts from the top of the page.
+  await openWithChanges(page, "?q=no+fund+is+called+this");
+  await expect(page.locator("#clear-filters")).toBeVisible();
+  await expectFocusOutlines(page, [...CONTROLS, "#clear-filters"]);
 });

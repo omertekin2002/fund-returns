@@ -1,11 +1,14 @@
 // Run with: npm run test:e2e
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
+import { ruleCountsNote, ruleCountText } from "../site/rulecounts.js";
+import { withOnePassingFund, withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 import {
+  committedData,
   committedPrevious,
   coverage,
   data,
@@ -68,13 +71,35 @@ test("lists passing funds without a reason, and excluded funds with one", async 
   await expect(rows(page)).toHaveCount(funds.length);
 });
 
-test("shows six rule cards whose counts add up to the excluded funds", async ({ page }) => {
+test("shows six rule cards whose first-failure counts add up to the excluded funds", async ({ page }) => {
   await open(page);
   expect(RULES).toHaveLength(6);
   const counts = page.locator("#rules li strong");
-  await expect(counts).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+  await expect(counts).toHaveText(ruleCounts.map(ruleCountText));
+  // "No funds …" is a count of 0.
   const shown = (await counts.allTextContents()).map((text) => Number(text.replace(/[^\d]/g, "")));
   expect(shown.reduce((sum, n) => sum + n, 0)).toBe(excluded.length);
+
+  // The line under the heading says what the counts are, with the Excluded total.
+  const note = page.locator("#rules-note");
+  await expect(note).toBeVisible();
+  await expect(note).toHaveText(ruleCountsNote(excluded.length));
+  await expect(note).toContainText("counted once, under the first rule it breaks");
+  const total = Number((await note.textContent()).match(/the ([\d,]+) excluded/)[1].replace(/,/g, ""));
+  expect(total).toBe(shown.reduce((sum, n) => sum + n, 0));
+  await expect(note).toContainText(`the ${await page.locator('[data-count="excluded"]').textContent()} excluded`);
+});
+
+test("the rule count line fits a 320 px screen", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await open(page);
+  const note = page.locator("#rules-note");
+  await note.scrollIntoViewIfNeeded();
+  await expect(note).toBeVisible();
+  const box = await note.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
 test("search narrows the table, and says when nothing matches", async ({ page }) => {
@@ -95,7 +120,7 @@ test("search narrows the table, and says when nothing matches", async ({ page })
   await page.locator("#search").fill("no fund is called this");
   await expect(rows(page)).toHaveCount(0);
   await expect(page.locator("#empty")).toBeVisible();
-  await expect(page.locator("#empty")).toHaveText("No funds match.");
+  await expect(page.locator("#empty-message")).toHaveText('No funds match the search "no fund is called this".');
 });
 
 test("clicking a column header sorts by it, and clicking again reverses", async ({ page }) => {
@@ -253,7 +278,8 @@ test.describe("type and risk filters", () => {
       `all ${formatCount(funds.length)} funds traded on TEFAS are checked against six rules. ` +
         `${formatCount(passing.length)} pass all six`,
     );
-    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map(ruleCountText));
+    await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
   }
 
   async function expectRows(page, { type, risk }) {
@@ -713,7 +739,8 @@ test.describe("changes since the previous update", () => {
   // The sticker and the rule cards always count every fund.
   async function expectGlobalSummary(page) {
     await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
-    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map(ruleCountText));
+    await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
   }
 
   test("the fixture has the changes it was built with", () => {
@@ -945,8 +972,12 @@ test.describe("changes since the previous update", () => {
       const unchanged = passing.find((f) => !changes.entered.includes(f.code));
       await page.locator("#search").fill(unchanged.code);
       await expect(rows(page)).toHaveCount(0);
-      await expect(page.locator("#empty")).toHaveText("No funds match.");
+      await expect(page.locator("#empty-message")).toHaveText(
+        `No funds match the type "${fund.umbrella}", risk ${fund.risk}, ` +
+          `the change filter "Entered the passing list" and the search "${unchanged.code}".`,
+      );
       await expect(page.locator("#empty")).toBeVisible();
+      await expect(page.locator("#clear-filters")).toBeVisible();
       await expect(page.locator("#download-csv")).toBeDisabled();
     });
 
@@ -968,7 +999,8 @@ test.describe("changes since the previous update", () => {
       const released = new Promise((resolve) => {
         release = resolve;
       });
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", async (route) => {
         await released;
         await route.fulfill({ json: previous });
@@ -1017,7 +1049,8 @@ test.describe("changes since the previous update", () => {
   test("a broken previous update is ignored without errors", async ({ page }) => {
     for (const body of ["not json", "[]", '{"funds": 5}']) {
       const errors = collectErrors(page);
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", (route) => route.fulfill({ contentType: "application/json", body }));
       await open(page);
       await page.waitForLoadState("networkidle");
@@ -1036,7 +1069,8 @@ test.describe("changes since the previous update", () => {
       const label = `${response.status ?? 200} ${response.body}`;
       const errors = collectErrors(page);
       let requested = false;
-      await page.unrouteAll();
+      // Only the previous update's routes: the one fixtures.js serves the data with stays.
+      await page.unroute("**/data/previous.json");
       await page.route("**/data/previous.json", (route) => {
         requested = true;
         return route.fulfill(response);
@@ -1050,6 +1084,136 @@ test.describe("changes since the previous update", () => {
       await expectCounts(page, { passing: passing.length, excluded: excluded.length });
       expect(errors.filter((text) => !text.startsWith("Failed to load resource")), label).toEqual([]);
     }
+  });
+});
+
+test.describe("the empty table", () => {
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+  const message = (page) => page.locator("#empty-message");
+  const button = (page) => page.locator("#clear-filters");
+  const type = umbrellas[0];
+  // The type, risk and search narrow the Excluded view, sorted by Sharpe, to
+  // nothing.
+  const narrowed = `?view=excluded&sort=sharpe&dir=asc&type=${encodeURIComponent(type)}&risk=1&q=zzzz`;
+  const narrowedText = `No funds match the type "${type}", risk 1 and the search "zzzz".`;
+
+  // After a reset: the view and sort stay, the filters and search are clear.
+  async function expectCleared(page) {
+    await expect(rows(page)).toHaveCount(excluded.length);
+    await expect(page.locator("#empty")).toBeHidden();
+    await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(header(page, "sharpe")).toHaveAttribute("aria-sort", "ascending");
+    await expect(page.locator("#type-filter")).toHaveValue("");
+    await expect(page.locator("#risk-filter")).toHaveValue("");
+    await expect(page.locator("#search")).toHaveValue("");
+    await expect.poll(() => params(page)).toEqual({ view: "excluded", sort: "sharpe", dir: "asc" });
+    await expect(page.locator("#search")).toBeFocused();
+    await expect(page.locator("#search")).toBeVisible();
+  }
+
+  test("names exactly the filters and search that leave no fund, with a reset button", async ({ page }) => {
+    await open(page, narrowed);
+    await expect(rows(page)).toHaveCount(0);
+    await expect(message(page)).toHaveText(narrowedText);
+    await expect(button(page)).toBeVisible();
+    await expect(button(page)).toHaveText("Clear filters and search");
+
+    // Only the ones that are set.
+    await page.locator("#risk-filter").selectOption("");
+    await expect(message(page)).toHaveText(`No funds match the type "${type}" and the search "zzzz".`);
+    await page.locator("#type-filter").selectOption("");
+    await expect(message(page)).toHaveText('No funds match the search "zzzz".');
+    await page.locator("#search").fill("");
+    await expect(page.locator("#empty")).toBeHidden();
+  });
+
+  test("names a risk level that leaves no fund of a type", async ({ page }) => {
+    // A type and risk level with excluded funds but no passing ones.
+    const combo = umbrellas
+      .flatMap((umbrella) => ["1", "2", "3", "4", "5", "6", "7"].map((risk) => ({ type: umbrella, risk })))
+      .find((c) => filtered(c).passing.length === 0 && filtered(c).excluded.length > 0);
+    expect(combo).toBeDefined();
+    await open(page, `?type=${encodeURIComponent(combo.type)}&risk=${combo.risk}`);
+    await expect(rows(page)).toHaveCount(0);
+    await expect(message(page)).toHaveText(`No funds match the type "${combo.type}" and risk ${combo.risk}.`);
+    await expect(button(page)).toBeVisible();
+  });
+
+  test("the button clears the filters and search, keeping the view and sort", async ({ page }) => {
+    await open(page, narrowed);
+    await button(page).click();
+    await expectCleared(page);
+  });
+
+  for (const key of ["Enter", "Space"]) {
+    test(`the button works from the keyboard with ${key}`, async ({ page }) => {
+      await open(page, narrowed);
+      await button(page).focus();
+      await page.keyboard.press(key);
+      await expectCleared(page);
+    });
+  }
+
+  test("names and clears the change filter once the changes have loaded", async ({ page }) => {
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previousData().previous }));
+    await open(page, "?changed=entered&q=zzzz");
+    await expect(page.locator("#change-filter")).toBeVisible();
+    await expect(message(page)).toHaveText(
+      'No funds match the change filter "Entered the passing list" and the search "zzzz".',
+    );
+    await button(page).click();
+    await expect(page.locator("#change-filter")).toHaveValue("");
+    await expect(rows(page)).toHaveCount(passing.length);
+    await expect.poll(() => params(page)).toEqual({});
+    await expect(page.locator("#search")).toBeFocused();
+  });
+
+  test("shows the search as text, never as HTML", async ({ page }) => {
+    const errors = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const query = '<img src=x onerror="window.injected=1">';
+    await open(page, `?q=${encodeURIComponent(query)}`);
+    await expect(message(page)).toHaveText(`No funds match the search "${query}".`);
+    await expect(page.locator("#empty img")).toHaveCount(0);
+    expect(await page.evaluate(() => window.injected)).toBeUndefined();
+    expect(errors).toEqual([]);
+  });
+
+  test("fits a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    const longType = [...umbrellas].sort((a, b) => b.length - a.length)[0];
+    await open(page, `?type=${encodeURIComponent(longType)}&risk=1&q=${"averylongsearchwithoutspaces".repeat(3)}`);
+    await expect(button(page)).toBeVisible();
+    for (const locator of [message(page), button(page)]) {
+      const box = await locator.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    expect((await button(page).boundingBox()).height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
+test.describe("on a day when no fund passes, the empty Passing view", () => {
+  test.use({ fundsData: withoutPassingFunds(committedData) });
+
+  test("says no fund passes all six rules, without a reset button, even with filters", async ({ page }) => {
+    await page.goto("./");
+    await expect(page.locator("#pass-sticker")).toHaveText("0 funds pass");
+    await expect(rows(page)).toHaveCount(0);
+    await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+    await expect(page.locator("#empty")).not.toContainText("No funds match");
+    await expect(page.locator("#clear-filters")).toBeHidden();
+
+    await page.locator("#risk-filter").selectOption("6");
+    await page.locator("#search").fill("zzzz");
+    await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+    await expect(page.locator("#clear-filters")).toBeHidden();
+
+    // The Excluded view lists funds, so there the filters are named.
+    await page.locator('[data-view="excluded"]').click();
+    await expect(page.locator("#empty-message")).toHaveText('No funds match risk 6 and the search "zzzz".');
+    await expect(page.locator("#clear-filters")).toBeVisible();
   });
 });
 
@@ -1145,12 +1309,17 @@ test.describe("CSV download", () => {
   });
 
   test("follows the search and the risk filter, and the Passing view has no Reason column", async ({ page }) => {
-    // The risk level with the most passing funds, so the file has rows whatever
-    // the day's data; most fund names contain "PORTFÖY" (searched lower-case).
-    const counts = new Map();
-    for (const f of passing) if (f.risk) counts.set(f.risk, (counts.get(f.risk) ?? 0) + 1);
-    const risk = String([...counts].sort((a, b) => b[1] - a[1])[0][0]);
+    // The risk level with the most passing funds the search matches, so the
+    // file has rows whatever the day's data; most fund names contain "PORTFÖY"
+    // (searched lower-case), and so do the funds expected.js makes pass.
     const query = "portföy";
+    const counts = new Map();
+    for (const f of passing) {
+      if (f.risk && normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(query)) {
+        counts.set(f.risk, (counts.get(f.risk) ?? 0) + 1);
+      }
+    }
+    const risk = String([...counts].sort((a, b) => b[1] - a[1])[0][0]);
     await open(page, `?q=${encodeURIComponent(query)}&risk=${risk}`);
     const expected = filtered({ risk }).passing.filter((f) =>
       normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(query),
@@ -1198,12 +1367,14 @@ test.describe("CSV download", () => {
   });
 
   test("is disabled while no fund matches, and before the data loads", async ({ page }) => {
-    await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
+    const fail = (route) => route.fulfill({ status: 500, body: "" });
+    await page.route("**/data/funds.json", fail);
     await page.goto("./");
     await expect(page.locator("#pass-sticker")).toHaveText("No data");
     await expect(button(page)).toBeDisabled();
 
-    await page.unrouteAll();
+    // Back to the data fixtures.js serves.
+    await page.unroute("**/data/funds.json", fail);
     await open(page);
     await expect(button(page)).toBeEnabled();
     await page.locator("#search").fill("no fund is called this");
@@ -1282,4 +1453,84 @@ test.describe("Sharpe ratios based on less than six months", () => {
     await expect(cell(page, short[0].code).locator(".sharpe-note")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   });
+});
+
+// The specs above serve data in which some funds always pass (see
+// fixtures.js). These check the page on the committed data as it is, and on
+// days when no fund or a single fund passes: the counts are the ones
+// filter.js works out, and nothing breaks.
+test.describe("whatever the day's data", () => {
+  const collectErrors = (page) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    return errors;
+  };
+
+  for (const [name, fundsData, passingCount] of [
+    ["the committed data as it is", null, null],
+    ["a day when no fund passes", withoutPassingFunds(committedData), 0],
+    ["a day when one fund passes", withOnePassingFund(committedData).data, 1],
+  ]) {
+    test.describe(`on ${name}`, () => {
+      test.use({ fundsData });
+      const all = classifyFunds((fundsData ?? committedData).funds);
+      const passing = all.filter((f) => !f.reason);
+      const excluded = all.filter((f) => f.reason);
+
+      if (passingCount !== null) {
+        test(`the data has ${passingCount} passing ${passingCount === 1 ? "fund" : "funds"}`, () => {
+          expect(passing).toHaveLength(passingCount);
+        });
+      }
+
+      test("shows the counts, rows and changes worked out from it, without errors", async ({ page }) => {
+        const errors = collectErrors(page);
+        await page.goto("./?view=passing");
+        await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
+        await expect(page.locator("#status")).toContainText(
+          `all ${formatCount(all.length)} funds traded on TEFAS are checked against six rules. ` +
+            `${formatCount(passing.length)} pass all six`,
+        );
+        await expect(page.locator('[data-count="passing"]')).toHaveText(formatCount(passing.length));
+        await expect(page.locator('[data-count="excluded"]')).toHaveText(formatCount(excluded.length));
+        await expect(page.locator('[data-count="all"]')).toHaveText(formatCount(all.length));
+        await expect(page.locator("#rules li strong")).toHaveText(
+          RULES.map((rule) => ruleCountText(excluded.filter((f) => f.reason.rule === rule.id).length)),
+        );
+        await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
+        await expect(rows(page)).toHaveCount(passing.length);
+        if (passing.length === 0) {
+          await expect(page.locator("#empty")).toBeVisible();
+          await expect(page.locator("#empty-message")).toHaveText("No fund passes all six rules in the latest data.");
+          await expect(page.locator("#clear-filters")).toBeHidden();
+          await expect(page.locator("#download-csv")).toBeDisabled();
+        } else {
+          await expect(page.locator("#empty")).toBeHidden();
+          await expect(page.locator("#download-csv")).toBeEnabled();
+        }
+
+        await page.locator('[data-view="excluded"]').click();
+        await expect(rows(page)).toHaveCount(excluded.length);
+        await expect(page.locator("#funds tbody td.col-reason:empty")).toHaveCount(0);
+
+        // The committed previous update, compared with this data.
+        if (committedPrevious) {
+          const changes = membershipChanges(all, classifyFunds(committedPrevious.funds));
+          await expect(page.locator("#changes")).toHaveText(changesSummary(changes, committedPrevious.fetchedAt));
+          await page.locator('[data-view="all"]').click();
+          await expect(rows(page)).toHaveCount(all.length);
+          await expect(page.locator("#funds tbody td.col-code .badge", { hasText: "NEW" })).toHaveCount(
+            changes.entered.length,
+          );
+          await expect(page.locator("#funds tbody td.col-code .badge", { hasText: "LEFT" })).toHaveCount(
+            changes.left.length - changes.gone.length,
+          );
+        }
+        expect(errors).toEqual([]);
+      });
+    });
+  }
 });

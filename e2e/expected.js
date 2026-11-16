@@ -1,14 +1,22 @@
-// The numbers the page should show, worked out from the committed data with
-// the same modules site/app.js uses, so the specs keep passing when the daily
-// update changes the counts.
+// The numbers the page should show, worked out from the data the specs serve
+// with the same modules site/app.js uses, so the specs keep passing when the
+// daily update changes the counts.
 import { existsSync, readFileSync } from "node:fs";
 import { classifyFunds, membershipChanges } from "../site/changes.js";
 import { dataCoverage } from "../site/coverage.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import { recentCount, recentPrices, sparkline } from "../site/sparkline.js";
+import { withPassingFunds } from "../tests/fund-fixtures.mjs";
 
-export const data = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
+// The committed data/funds.json, as the daily update left it.
+export const committedData = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
+
+// The data every spec serves as data/funds.json (see fixtures.js): the
+// committed data with a few more funds made to pass (forcedCodes), so the
+// specs have passing and excluded funds to check however many funds pass on
+// the committed day, even none.
+export const { data, codes: forcedCodes } = withPassingFunds(committedData);
 
 export const funds = classifyFunds(data.funds);
 

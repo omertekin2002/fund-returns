@@ -192,6 +192,10 @@ h1 {
   background: var(--tint-olive);
 }
 
+.criteria-note {
+  margin: 0 0 var(--space-lg);
+}
+
 .ribbon-list {
   display: grid;
   gap: var(--space-md);
@@ -475,6 +479,16 @@ td.col-sparkline {
 .empty {
   padding: var(--space-xxl);
   text-align: center;
+}
+
+.empty p {
+  margin: 0;
+  /* A long search or fund type wraps instead of running off a 320px screen. */
+  overflow-wrap: anywhere;
+}
+
+.empty .button-secondary {
+  margin-top: var(--space-lg);
 }
 
 /* ─── Footer ─── */

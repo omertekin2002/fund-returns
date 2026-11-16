@@ -2,8 +2,10 @@ import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes
 import { COLUMNS, columnsFor } from "./columns.js";
 import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
+import { emptyMessage, inView } from "./empty.js";
 import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
+import { ruleCounts, ruleCountsNote, ruleCountText } from "./rulecounts.js";
 import { HEIGHT, polylinePoints, recentCount, recentPrices, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
@@ -31,9 +33,12 @@ const els = {
   stale: document.getElementById("stale"),
   changes: document.getElementById("changes"),
   rules: document.getElementById("rules"),
+  rulesNote: document.getElementById("rules-note"),
   headerRow: document.getElementById("header-row"),
   body: document.querySelector("#funds tbody"),
   empty: document.getElementById("empty"),
+  emptyMessage: document.getElementById("empty-message"),
+  clearFilters: document.getElementById("clear-filters"),
   search: document.getElementById("search"),
   download: document.getElementById("download-csv"),
   typeFilter: document.getElementById("type-filter"),
@@ -78,11 +83,12 @@ function visibleColumns() {
   return columnsFor(state.view);
 }
 
+// The rule cards count every fund, so they don't follow the view, filters or
+// search.
 function renderRules() {
-  const counts = {};
-  for (const fund of state.funds) {
-    if (fund.reason) counts[fund.reason.rule] = (counts[fund.reason.rule] ?? 0) + 1;
-  }
+  const counts = ruleCounts(state.funds);
+  els.rulesNote.textContent = ruleCountsNote(state.funds.filter((f) => f.reason).length);
+  els.rulesNote.hidden = false;
   els.rules.replaceChildren(
     ...RULES.map((rule, index) => {
       const li = document.createElement("li");
@@ -93,7 +99,7 @@ function renderRules() {
       const body = document.createElement("div");
       body.className = `ribbon-body rule-${rule.id}`;
       const count = document.createElement("strong");
-      count.textContent = `${countFormat.format(counts[rule.id] ?? 0)} funds out.`;
+      count.textContent = ruleCountText(counts[rule.id] ?? 0);
       body.append(`${rule.text} `, count);
       li.append(title, body);
       return li;
@@ -162,7 +168,7 @@ function selectedFunds() {
   const query = normalize(state.query.trim());
   const col = COLUMNS.find((c) => c.key === state.sortKey);
   return filteredFunds()
-    .filter((f) => state.view === "all" || (state.view === "passing") === !f.reason)
+    .filter((f) => inView(state.view, f))
     .filter((f) => !query || f.searchText.includes(query))
     .sort((a, b) => compare(a, b, col) || a.code.localeCompare(b.code));
 }
@@ -249,9 +255,34 @@ function renderBody() {
     return tr;
   });
   els.body.replaceChildren(...rows);
-  els.empty.hidden = funds.length > 0;
+  renderEmpty(funds.length === 0);
   // Nothing to download while no fund matches.
   els.download.disabled = funds.length === 0;
+}
+
+// Under an empty table, says why it is empty: the view lists no fund at all
+// in the data, or the filters and search it names leave none, with a button
+// that clears them. Set with textContent, so no text from the data or the
+// search is read as HTML.
+function renderEmpty(isEmpty) {
+  els.empty.hidden = !isEmpty;
+  if (!isEmpty) return;
+  const { text, reset } = emptyMessage(state, state.funds);
+  els.emptyMessage.textContent = text;
+  els.clearFilters.hidden = !reset;
+}
+
+// Clears the type, risk and change filters and the search, keeping the view
+// and the sort. The button disappears with the empty message, so focus moves
+// to the search box.
+function clearFilters() {
+  Object.assign(state, { type: "", risk: "", changed: "", query: "" });
+  els.typeFilter.value = state.type;
+  els.riskFilter.value = state.risk;
+  els.changeFilter.value = state.changed;
+  els.search.value = state.query;
+  render();
+  els.search.focus();
 }
 
 // Downloads the rows the table shows, in its order, as a CSV file.
@@ -345,6 +376,7 @@ async function init() {
   }
   els.riskFilter.value = state.risk;
   els.download.addEventListener("click", downloadCsv);
+  els.clearFilters.addEventListener("click", clearFilters);
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],
