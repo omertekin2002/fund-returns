@@ -5,6 +5,7 @@ import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
+import { ruleCountsNote, ruleCountText } from "../site/rulecounts.js";
 import { withOnePassingFund, withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 import {
   committedData,
@@ -70,13 +71,35 @@ test("lists passing funds without a reason, and excluded funds with one", async 
   await expect(rows(page)).toHaveCount(funds.length);
 });
 
-test("shows six rule cards whose counts add up to the excluded funds", async ({ page }) => {
+test("shows six rule cards whose first-failure counts add up to the excluded funds", async ({ page }) => {
   await open(page);
   expect(RULES).toHaveLength(6);
   const counts = page.locator("#rules li strong");
-  await expect(counts).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+  await expect(counts).toHaveText(ruleCounts.map(ruleCountText));
+  // "No funds …" is a count of 0.
   const shown = (await counts.allTextContents()).map((text) => Number(text.replace(/[^\d]/g, "")));
   expect(shown.reduce((sum, n) => sum + n, 0)).toBe(excluded.length);
+
+  // The line under the heading says what the counts are, with the Excluded total.
+  const note = page.locator("#rules-note");
+  await expect(note).toBeVisible();
+  await expect(note).toHaveText(ruleCountsNote(excluded.length));
+  await expect(note).toContainText("counted once, under the first rule it breaks");
+  const total = Number((await note.textContent()).match(/the ([\d,]+) excluded/)[1].replace(/,/g, ""));
+  expect(total).toBe(shown.reduce((sum, n) => sum + n, 0));
+  await expect(note).toContainText(`the ${await page.locator('[data-count="excluded"]').textContent()} excluded`);
+});
+
+test("the rule count line fits a 320 px screen", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 800 });
+  await open(page);
+  const note = page.locator("#rules-note");
+  await note.scrollIntoViewIfNeeded();
+  await expect(note).toBeVisible();
+  const box = await note.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
 test("search narrows the table, and says when nothing matches", async ({ page }) => {
@@ -255,7 +278,8 @@ test.describe("type and risk filters", () => {
       `all ${formatCount(funds.length)} funds traded on TEFAS are checked against six rules. ` +
         `${formatCount(passing.length)} pass all six`,
     );
-    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map(ruleCountText));
+    await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
   }
 
   async function expectRows(page, { type, risk }) {
@@ -715,7 +739,8 @@ test.describe("changes since the previous update", () => {
   // The sticker and the rule cards always count every fund.
   async function expectGlobalSummary(page) {
     await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
-    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map((n) => `${formatCount(n)} funds out.`));
+    await expect(page.locator("#rules li strong")).toHaveText(ruleCounts.map(ruleCountText));
+    await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
   }
 
   test("the fixture has the changes it was built with", () => {
@@ -1473,8 +1498,9 @@ test.describe("whatever the day's data", () => {
         await expect(page.locator('[data-count="excluded"]')).toHaveText(formatCount(excluded.length));
         await expect(page.locator('[data-count="all"]')).toHaveText(formatCount(all.length));
         await expect(page.locator("#rules li strong")).toHaveText(
-          RULES.map((rule) => `${formatCount(excluded.filter((f) => f.reason.rule === rule.id).length)} funds out.`),
+          RULES.map((rule) => ruleCountText(excluded.filter((f) => f.reason.rule === rule.id).length)),
         );
+        await expect(page.locator("#rules-note")).toHaveText(ruleCountsNote(excluded.length));
         await expect(rows(page)).toHaveCount(passing.length);
         if (passing.length === 0) {
           await expect(page.locator("#empty")).toBeVisible();

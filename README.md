@@ -52,6 +52,19 @@ A fund is shown only if it breaks none of these rules:
 The rules live in [`site/filter.js`](site/filter.js) and run in the browser, so
 the page can also list excluded funds with the rule each one broke.
 
+Each rule card under **The Criteria** ends with how many funds that rule
+excludes first, e.g. "212 funds out here first." (or "1 fund out here first."
+and "No funds out here first."). These are first failures, not independent
+failure totals: an excluded fund is counted once, under the first rule it
+breaks (the one its Reason column names), so a fund that breaks rules 1, 5 and
+6 is counted only under rule 1, and the later rules' counts (rule 6 in
+particular) are lower than the number of funds that break them. The counts add
+up to the excluded funds, and a line under the heading says so with the total
+from the data, e.g. "Each excluded fund is counted once, under the first rule
+it breaks, so the cards add up to the 965 excluded funds." Like the cards, it
+counts every fund, whatever the view, filters or search. Both are worded by
+[`site/rulecounts.js`](site/rulecounts.js).
+
 ## Changes since the last update
 
 Under the banner, the page says how many funds entered or left the passing
@@ -279,7 +292,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
 ratio, price line, data freshness, coverage, URL state, changes, CSV, empty
-table message and data fixture tests
+table message, rule card count and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
@@ -309,7 +322,9 @@ committed data in which no fund passes, or exactly one does.
 The specs in [`e2e/`](e2e/) check that the page loads
 without errors; that the sticker, the Passing / Excluded / All counts and the
 rule cards match the numbers worked out from the data with `filter.js` and
-`sharpe.js`; that the table lists the right rows (with a Reason column only
+`sharpe.js`, worded as first failures (e.g. "212 funds out here first."), and
+that the line under The Criteria gives the Excluded count as the total the
+cards add up to and fits a 320 px screen; that the table lists the right rows (with a Reason column only
 for excluded funds); that search and column sorting work, and are kept in
 and restored from the URL; that every fund with two prices has a labelled
 4-week price line (and the rest show `—`), and that its column can't be
