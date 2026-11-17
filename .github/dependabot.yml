@@ -1,0 +1,32 @@
+# Dependabot proposes updates for the pinned GitHub Actions and the npm dev
+# dependencies (Playwright and axe). Each ecosystem gets at most one grouped PR
+# a month, and only for releases at least 7 days old. The PRs run test.yml like
+# any other PR (read-only token) and are merged by the owner. scripts/ uses only
+# the Python standard library, so there is no pip entry.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      npm:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore
