@@ -1,6 +1,9 @@
 {
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "test": "node --test && python3 -m unittest discover -s tests -v",
     "fetch": "python3 scripts/fetch_funds.py",

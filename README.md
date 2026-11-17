@@ -220,6 +220,11 @@ The button is disabled until the data has loaded, and while no fund matches.
   run the tests, so they never hold back the daily update. That leaves a gap:
   a pushed commit whose tests failed is still deployed by the next data run,
   unless it is fixed or reverted first.
+- [`.github/dependabot.yml`](.github/dependabot.yml) has Dependabot propose
+  updates for the GitHub Actions the workflows use and the npm dev
+  dependencies (Playwright and axe): once a month, at most one grouped PR for
+  each, and only for releases at least 7 days old. Those PRs run `test.yml`
+  like any other PR (read-only token) and wait for the owner to merge them.
 
 The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
 black page frame, flat colour blocks, Arial Black headings over Times body).
@@ -285,7 +290,7 @@ cron-job.org job on purpose, close the issue by hand.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # unit tests (Node 20+ and Python 3.9+)
+npm test        # unit tests (Node 22.12+ and Python 3.9+)
 npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
