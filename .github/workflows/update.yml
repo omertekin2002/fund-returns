@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the refreshed data file
+      actions: read # list the test runs (see "Choose the code to deploy")
     outputs:
       skip: ${{ steps.today.outputs.skip }}
     steps:
@@ -63,10 +64,76 @@ jobs:
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
 
+      # Data runs don't run the tests, so that a test failure never holds
+      # back the data, but they mustn't deploy code whose tests failed either.
+      # scripts/deploy_source.py finds the last commit whose push run of the
+      # tests passed. If only site/data/ changed since, this deploys the tip as
+      # usual; otherwise it deploys site/ from that commit with today's
+      # site/data/ and warns. The data commit pushed above is the same either
+      # way. Any error here leaves the path output unset, so the tip is
+      # deployed as before (see the next step): the data must still go out.
+      - name: Choose the code to deploy
+        id: source
+        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The checkout is shallow; the green commit may be further back.
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            git fetch --quiet --unshallow origin "$GITHUB_REF_NAME"
+          fi
+          git rev-list --first-parent --max-count=500 HEAD > "$RUNNER_TEMP/commits.txt"
+          # update.yml's push runs run the same tests before deploying, and
+          # may finish before test.yml's run for the same commit.
+          for workflow in test.yml update.yml; do
+            gh run list --workflow "$workflow" --branch "$GITHUB_REF_NAME" \
+              --event push --limit 100 --json headSha,conclusion,status \
+              > "$RUNNER_TEMP/runs-$workflow.json"
+          done
+          python3 scripts/deploy_source.py \
+            "$RUNNER_TEMP/runs-test.yml.json" "$RUNNER_TEMP/runs-update.yml.json" \
+            --commits "$RUNNER_TEMP/commits.txt" > "$RUNNER_TEMP/source.txt"
+          source=$(sed -n 's/^source=//p' "$RUNNER_TEMP/source.txt")
+          tip=$(sed -n 's/^tip=//p' "$RUNNER_TEMP/source.txt")
+          green=$(sed -n 's/^green=//p' "$RUNNER_TEMP/source.txt")
+          warning=$(sed -n 's/^warning=//p' "$RUNNER_TEMP/source.txt")
+
+          path=site
+          if [ "$source" = green ]; then
+            deploy="$RUNNER_TEMP/deploy"
+            rm -rf "$deploy"
+            mkdir -p "$deploy"
+            git archive "$green" site | tar -x -C "$deploy"
+            rm -rf "$deploy/site/data"
+            cp -R site/data "$deploy/site/data"
+            path="$deploy/site"
+          fi
+
+          {
+            echo "### Deployed code"
+            echo
+            if [ "$source" = green ]; then
+              echo "\`site/\` from \`$green\` with \`site/data/\` from the tip \`$tip\`."
+            else
+              echo "\`site/\` from the tip \`$tip\` (last commit whose tests passed: \`${green:-none found}\`)."
+            fi
+            if [ -n "$warning" ]; then echo; echo "⚠️ $warning"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$warning" ]; then echo "::warning title=Deployed code::$warning"; fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+
+      - name: Warn that the tip is deployed unchecked
+        if: steps.source.outcome == 'failure'
+        run: |
+          msg="Couldn't check which code passed its tests (see the \"Choose the code to deploy\" step), so this run deploys site/ from the tip $(git rev-parse --short HEAD), as data runs did before."
+          echo "::warning title=Deployed code::$msg"
+          echo "⚠️ $msg" >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-pages-artifact@v5
         if: steps.today.outputs.skip != 'true'
         with:
-          path: site
+          path: ${{ steps.source.outputs.path || 'site' }}
 
   # On the fallback run, tell the owner when cron-job.org didn't start the
   # 10:15 run (usually an expired token, see README). This job is separate
@@ -121,8 +188,9 @@ jobs:
 
   # On pushes to main (code changes), run the unit and page tests from
   # test.yml before deploying. Data runs (schedule, workflow_dispatch) skip
-  # this: the committed-data tests need at least one passing fund, and a day
-  # with none is a valid result that must still be deployed.
+  # this so that a test failure never holds back the daily data; instead the
+  # build job's "Choose the code to deploy" step deploys only code whose tests
+  # passed on an earlier push.
   tests:
     if: github.event_name == 'push'
     permissions:
