@@ -217,9 +217,16 @@ The button is disabled until the data has loaded, and while no fund matches.
   `update.yml` runs the same two jobs on a push to `main` and deploys only
   after both pass, so a code change that breaks a test doesn't go live.
   Data runs (the 10:15 trigger, the fallback schedule and manual runs) don't
-  run the tests, so they never hold back the daily update. That leaves a gap:
-  a pushed commit whose tests failed is still deployed by the next data run,
-  unless it is fixed or reverted first.
+  run the tests, so they never hold back the daily update, but they don't
+  deploy untested code either.
+  [`scripts/deploy_source.py`](scripts/deploy_source.py) finds the last
+  commit on `main` whose push run of the tests passed. If only `site/data/`
+  changed since (the usual day), the data run deploys `site/` as it is.
+  Otherwise, while newer code's tests have failed or are still running, it
+  deploys `site/` from that commit with the new `site/data/`, and the run's
+  summary and a warning name both commits; the newer code goes live once its
+  tests pass. If no such commit is found, or the check itself fails, it
+  deploys `site/` as it is and warns. The data commit is the same either way.
 - [`.github/dependabot.yml`](.github/dependabot.yml) has Dependabot propose
   updates for the GitHub Actions the workflows use and the npm dev
   dependencies (Playwright and axe): once a month, at most one grouped PR for
@@ -302,9 +309,11 @@ table message, rule card count and data fixture tests
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
-and the trigger check tests
-cover its decision with fixture `gh run list` output, so they need no network
-and no packages.
+the trigger check tests
+cover its decision with fixture `gh run list` output, and the deploy source
+tests cover the choice of code to deploy with fixture `gh run list` output
+and a throwaway git repository, so they need no network and no packages
+(only `git`).
 
 `npm test` needs no `npm install`. The page tests do: run `npm ci` and
 `npx playwright install chromium` once, then `npm run test:e2e`. They serve
