@@ -162,6 +162,10 @@ highest price, so heights can't be compared between rows. Screen readers read
 the change from the first to the last price, e.g. "Price over 4 weeks: up
 2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
 
+On a narrow screen, such as a phone, the table scrolls sideways to reach this
+and the other columns. The **Code** column stays at the table's left edge while
+it does, so every row still says which fund it is.
+
 ## Download
 
 **Download CSV** above the table saves the rows the table shows, in the same
@@ -362,7 +366,11 @@ filter and the summary's links show exactly the funds that entered or left
 in the view that lists them (the filter combining with the other filters, the
 links clearing them), work from the keyboard and at 320 px wide, are
 kept in and restored from the URL, and are dropped from the URL when
-`previous.json` is missing or broken; and that Download
+`previous.json` is missing or broken; that the Code column, with its `NEW` /
+`LEFT` badges, stays at the table's left edge over the other cells when the
+table is scrolled fully sideways at 320 and 393 px in every view, leaves the
+column widths at 1280 px as they were, and that a header reached with Tab or
+Shift+Tab at 320 px is scrolled clear of it; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px

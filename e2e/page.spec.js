@@ -554,6 +554,169 @@ test.describe("4-week price line", () => {
   });
 });
 
+test.describe("the pinned Code column", () => {
+  const { previous, changes } = previousData();
+  // A fund that left and still has a row (in the Excluded and All views).
+  const leftCode = changes.left.find((code) => !changes.gone.includes(code));
+  const wrap = (page) => page.locator(".table-wrap");
+
+  test.beforeEach(async ({ page }) => {
+    // NEW and LEFT badges next to some codes.
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previous }));
+  });
+
+  // Scrolls the table fully to the right and the page down to the table.
+  async function scrollTableRight(page) {
+    await wrap(page).evaluate((el) => {
+      el.scrollIntoView();
+      el.scrollLeft = el.scrollWidth;
+    });
+  }
+
+  // Where the code cells should be (the wrapper's left edge, inside its
+  // border) and what each of `cells` looks like: its left edge, and whether
+  // it is the element drawn at its own centre (not a scrolled cell over it).
+  const pinnedGeometry = (page, cells) =>
+    page.evaluate((selector) => {
+      const wrapper = document.querySelector(".table-wrap");
+      const edge = wrapper.getBoundingClientRect().left + wrapper.clientLeft;
+      const cells = [...document.querySelectorAll(selector)].map((cell) => {
+        const box = cell.getBoundingClientRect();
+        const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { text: cell.textContent, left: box.left, onTop: cell.contains(top) };
+      });
+      return { edge, scrollLeft: wrapper.scrollLeft, cells };
+    }, cells);
+
+  for (const width of [320, 393]) {
+    for (const view of ["passing", "excluded", "all"]) {
+      test(`stays at the left edge at ${width} px in the ${view} view when the table scrolls sideways`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await open(page, view === "passing" ? "" : `?view=${view}`);
+        await scrollTableRight(page);
+        // The header cell and the first rows on screen.
+        const { edge, scrollLeft, cells } = await pinnedGeometry(
+          page,
+          "#funds thead th.col-code, #funds tbody tr:nth-child(-n+5) td.col-code",
+        );
+        // Scrolled far past the Code column.
+        expect(scrollLeft).toBeGreaterThan(500);
+        expect(cells).toHaveLength(6);
+        for (const cell of cells) {
+          expect(cell.left, cell.text).toBeCloseTo(edge, 0);
+          expect(cell.onTop, `${cell.text} is drawn over the scrolled cells`).toBe(true);
+        }
+        // Still no horizontal page scroll.
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      });
+    }
+  }
+
+  for (const [view, code, text] of [
+    ["passing", changes.entered[0], "NEW"],
+    ["excluded", leftCode, "LEFT"],
+  ]) {
+    test(`keeps the ${text} badge next to the code in the pinned cell`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 800 });
+      await open(page, view === "passing" ? "" : `?view=${view}`);
+      await page.locator("#search").fill(code);
+      await expect(rows(page)).toHaveCount(1);
+      await scrollTableRight(page);
+      const cell = page.locator("#funds tbody td.col-code");
+      await expect(cell.locator("a")).toHaveText(code);
+      await expect(cell.locator(".badge")).toHaveText(text);
+      const geometry = await cell.evaluate((td) => {
+        const wrapper = document.querySelector(".table-wrap");
+        const box = (el) => el.getBoundingClientRect();
+        const badge = td.querySelector(".badge");
+        const b = box(badge);
+        return {
+          edge: box(wrapper).left + wrapper.clientLeft,
+          cell: box(td),
+          link: box(td.querySelector("a")),
+          badge: b,
+          badgeOnTop: badge.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)),
+        };
+      });
+      expect(geometry.cell.left).toBeCloseTo(geometry.edge, 0);
+      // The badge is on the code's line, inside the pinned cell, and drawn.
+      expect(geometry.badge.left).toBeGreaterThan(geometry.link.right);
+      expect(geometry.badge.top).toBeLessThan(geometry.link.bottom);
+      expect(geometry.badge.right).toBeLessThanOrEqual(geometry.cell.right);
+      expect(geometry.badgeOnTop).toBe(true);
+    });
+  }
+
+  test("keeps the column widths at 1280 px", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await open(page, "?view=all");
+    const widths = () =>
+      page.locator("#header-row th").evaluateAll((ths) => ths.map((th) => th.getBoundingClientRect().width));
+    const pinned = await widths();
+    // The same table without the pinning.
+    await page.addStyleTag({ content: ".col-code { position: static !important; }" });
+    expect(await widths()).toEqual(pinned);
+  });
+
+  test("Tab and Shift+Tab bring each header into view clear of the pinned column at 320 px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await open(page, "?view=excluded");
+    await wrap(page).evaluate((el) => el.scrollIntoView());
+    const keys = await page
+      .locator("#header-row th button")
+      .evaluateAll((buttons) => buttons.map((b) => b.textContent));
+    expect(keys.at(-1)).toBe("Reason");
+
+    // Where the focused header is, against the pinned column and the wrapper.
+    const focused = () =>
+      page.evaluate(() => {
+        const el = document.activeElement;
+        const wrapper = document.querySelector(".table-wrap");
+        const box = el.getBoundingClientRect();
+        const pinned = document.querySelector("#header-row th.col-code").getBoundingClientRect();
+        const top = document.elementFromPoint(box.left + 6, box.top + box.height / 2);
+        return {
+          text: el.textContent,
+          left: box.left,
+          right: box.right,
+          width: box.width,
+          pinnedRight: pinned.right,
+          wrapRight: wrapper.getBoundingClientRect().left + wrapper.clientLeft + wrapper.clientWidth,
+          leftEdgeShows: el.contains(top),
+        };
+      });
+    const expectClear = (f) => {
+      expect(f.left, `${f.text} starts right of the pinned column`).toBeGreaterThanOrEqual(f.pinnedRight - 1);
+      expect(f.leftEdgeShows, `${f.text}'s left edge is not under the pinned column`).toBe(true);
+      // Fully in view when it fits next to the pinned column.
+      if (f.width <= f.wrapRight - f.pinnedRight) {
+        expect(f.right, `${f.text} ends inside the wrapper`).toBeLessThanOrEqual(f.wrapRight + 1);
+      }
+    };
+
+    await page.locator("#header-row th.col-code button").focus();
+    for (const key of keys.slice(1)) {
+      await page.keyboard.press("Tab");
+      const f = await focused();
+      expect(f.text).toBe(key);
+      expectClear(f);
+    }
+    // The Reason header fits beside the pinned column, so it shows in full.
+    const reason = await focused();
+    expect(reason.right).toBeLessThanOrEqual(reason.wrapRight + 1);
+
+    // And back, which scrolls left.
+    for (const key of keys.slice(1, -1).reverse()) {
+      await page.keyboard.press("Shift+Tab");
+      const f = await focused();
+      expect(f.text).toBe(key);
+      expectClear(f);
+    }
+  });
+});
+
 test.describe("price dates and coverage", () => {
   const priceDates = (page) => page.locator("#price-dates");
   const sentence = (page) => page.locator("#coverage");
