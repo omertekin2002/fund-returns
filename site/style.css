@@ -503,18 +503,23 @@ td.col-sparkline {
   white-space: nowrap;
 }
 
-.empty {
+/* The empty table's message, and the line under a capped table (see
+   rowlimit.js), each with its button. */
+.empty,
+.more-rows {
   padding: var(--space-xxl);
   text-align: center;
 }
 
-.empty p {
+.empty p,
+.more-rows p {
   margin: 0;
   /* A long search or fund type wraps instead of running off a 320px screen. */
   overflow-wrap: anywhere;
 }
 
-.empty .button-secondary {
+.empty .button-secondary,
+.more-rows .button-secondary {
   margin-top: var(--space-lg);
 }
 
