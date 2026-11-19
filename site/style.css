@@ -342,6 +342,9 @@ h1 {
 .table-wrap {
   overflow-x: auto;
   border: var(--hairline);
+  /* Keyboard focus scrolls a cell clear of the pinned Code column (see
+     .col-code below; about 86px wide with a NEW or LEFT badge). */
+  scroll-padding-left: 7em;
 }
 
 table {
@@ -387,6 +390,13 @@ th > span {
   cursor: default;
 }
 
+/* Header focus outlines sit inside the button: outside it, the scrolling
+   wrapper clipped their top edge and the pinned Code cell would cover the
+   left edge of the Fund header's. */
+th button:focus-visible {
+  outline-offset: -4px;
+}
+
 th button[data-dir="asc"]::after {
   content: " ▲";
   font-size: 0.8em;
@@ -408,6 +418,23 @@ th button[data-dir="desc"]::after {
 .col-code {
   font-weight: 700;
   white-space: nowrap;
+}
+
+/* The Code column stays at the left edge while the table scrolls sideways
+   (on phones), so every row still says which fund it is. Opaque canvas so
+   the scrolled cells pass under it, and a hairline right edge drawn by the
+   cell itself (a collapsed border would scroll away with the table). */
+th.col-code,
+td.col-code {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--canvas);
+  box-shadow: inset -1px 0 0 var(--frame-ink);
+}
+
+thead th.col-code {
+  z-index: 2;
 }
 
 .col-name {

@@ -361,6 +361,22 @@ function trendOf(prices, days) {
   return { points: line.segments.map(polylinePoints), label: sparklineLabel(line.change) };
 }
 
+// When a header button gets focus while the table is scrolled sideways, moves
+// it clear of the pinned Code column, and fully into view when it fits.
+// Browsers leave a partly visible element where it is, which here could be
+// under the pinned column with its label hidden.
+function revealFocusedHeader(event) {
+  const button = event.target;
+  const pinned = els.headerRow.querySelector("th.col-code");
+  if (!(button instanceof HTMLButtonElement) || !pinned || pinned.contains(button)) return;
+  const wrap = els.headerRow.closest(".table-wrap");
+  const box = button.getBoundingClientRect();
+  const left = pinned.getBoundingClientRect().right;
+  const right = wrap.getBoundingClientRect().left + wrap.clientLeft + wrap.clientWidth;
+  if (box.left < left) wrap.scrollLeft -= left - box.left;
+  else if (box.right > right) wrap.scrollLeft += Math.min(box.right - right, box.left - left);
+}
+
 async function init() {
   els.search.value = state.query;
   els.search.addEventListener("input", () => {
@@ -377,6 +393,7 @@ async function init() {
   els.riskFilter.value = state.risk;
   els.download.addEventListener("click", downloadCsv);
   els.clearFilters.addEventListener("click", clearFilters);
+  els.headerRow.addEventListener("focusin", revealFocusedHeader);
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],
