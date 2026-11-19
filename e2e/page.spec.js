@@ -5,8 +5,9 @@ import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
+import { ROW_LIMIT } from "../site/rowlimit.js";
 import { ruleCountsNote, ruleCountText } from "../site/rulecounts.js";
-import { withOnePassingFund, withoutPassingFunds } from "../tests/fund-fixtures.mjs";
+import { withOnePassingFund, withoutPassingFunds, withPassingFunds } from "../tests/fund-fixtures.mjs";
 import {
   committedData,
   committedPrevious,
@@ -26,6 +27,19 @@ import {
 
 const rows = (page) => page.locator("#funds tbody tr");
 const header = (page, key) => page.locator(`#header-row th.col-${key}`);
+
+// Expects the table to list `count` funds, pressing Show all first when it
+// shows only the first ROW_LIMIT of them (the Excluded and All views, see
+// rowlimit.js), so the checks after it cover every row.
+async function showEveryRow(page, count) {
+  const showAll = page.locator("#show-all");
+  if (count > ROW_LIMIT && (await showAll.isVisible())) {
+    await expect(rows(page)).toHaveCount(ROW_LIMIT);
+    await expect(showAll).toHaveText(`Show all ${formatCount(count)} funds`);
+    await showAll.click();
+  }
+  await expect(rows(page)).toHaveCount(count);
+}
 
 // Opens the page (with an optional query string) and waits until the data has
 // been rendered.
@@ -64,11 +78,11 @@ test("lists passing funds without a reason, and excluded funds with one", async 
   await page.locator('[data-view="excluded"]').click();
   await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
   await expect(header(page, "reason")).toHaveText("Reason");
-  await expect(rows(page)).toHaveCount(excluded.length);
+  await showEveryRow(page, excluded.length);
   await expect(page.locator("#funds tbody td.col-reason:empty")).toHaveCount(0);
 
   await page.locator('[data-view="all"]').click();
-  await expect(rows(page)).toHaveCount(funds.length);
+  await showEveryRow(page, funds.length);
 });
 
 test("shows six rule cards whose first-failure counts add up to the excluded funds", async ({ page }) => {
@@ -127,6 +141,8 @@ test("clicking a column header sorts by it, and clicking again reverses", async 
   await open(page);
   await page.locator('[data-view="all"]').click();
   await expect(header(page, "1m")).toHaveAttribute("aria-sort", "descending");
+  // Every row, so the order of the whole list is checked; sorting keeps them.
+  await showEveryRow(page, funds.length);
 
   const codes = funds.map((f) => f.code).sort((a, b) => a.localeCompare(b, "tr"));
   // The link, not the whole cell: a NEW or LEFT badge may follow the code.
@@ -150,6 +166,192 @@ test("clicking a column header sorts by it, and clicking again reverses", async 
   const present = values.filter((v) => v !== null);
   expect(present).toEqual([...present].sort((a, b) => b - a));
   expect(values.slice(present.length).every((v) => v === null)).toBe(true);
+});
+
+test.describe("the first 100 rows in the Excluded and All views", () => {
+  const showAll = (page) => page.locator("#show-all");
+  const capLine = (page) => page.locator("#more-rows-message");
+  const codeLinks = (page) => page.locator("#funds tbody td.col-code a");
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+
+  // Expects the table to show the first ROW_LIMIT of `count` funds, with the
+  // cap line and the button naming the full count.
+  async function expectCapped(page, count) {
+    await expect(rows(page)).toHaveCount(ROW_LIMIT);
+    await expect(capLine(page)).toBeVisible();
+    await expect(capLine(page)).toHaveText(`Showing the first ${ROW_LIMIT} of ${formatCount(count)} funds.`);
+    await expect(showAll(page)).toBeVisible();
+    await expect(showAll(page)).toHaveText(`Show all ${formatCount(count)} funds`);
+  }
+
+  async function expectUncapped(page, count) {
+    await expect(rows(page)).toHaveCount(count);
+    await expect(page.locator("#more-rows")).toBeHidden();
+  }
+
+  for (const [view, list] of [
+    ["excluded", excluded],
+    ["all", funds],
+  ]) {
+    test(`the ${view} view shows the first ${ROW_LIMIT} rows of the sorted list, and Show all the rest`, async ({
+      page,
+    }) => {
+      expect(list.length).toBeGreaterThan(ROW_LIMIT);
+      await open(page, `?view=${view}`);
+      await expectCapped(page, list.length);
+      await expect(page.locator(`[data-count="${view}"]`)).toHaveText(formatCount(list.length));
+      const capped = await codeLinks(page).allTextContents();
+
+      await showAll(page).click();
+      await expectUncapped(page, list.length);
+      // The rows on screen were the first of the full list, in the same order.
+      const every = await codeLinks(page).allTextContents();
+      expect(capped).toEqual(every.slice(0, ROW_LIMIT));
+      expect([...every].sort()).toEqual(list.map((f) => f.code).sort());
+      // Focus moves to the first newly shown row's code link.
+      await expect(codeLinks(page).nth(ROW_LIMIT)).toBeFocused();
+      await expect(codeLinks(page).nth(ROW_LIMIT)).toBeInViewport();
+    });
+  }
+
+  test("the Passing view and lists of 100 or fewer funds show every row, without the button", async ({ page }) => {
+    // A fund type with the most funds that still fit under the limit.
+    const type = umbrellas
+      .map((umbrella) => ({ umbrella, n: filtered({ type: umbrella }).all.length }))
+      .filter(({ n }) => n > 0 && n <= ROW_LIMIT)
+      .sort((a, b) => b.n - a.n)[0].umbrella;
+    const { all, excluded: excludedOfType } = filtered({ type });
+    await open(page, `?view=all&type=${encodeURIComponent(type)}`);
+    await expectUncapped(page, all.length);
+    await page.locator('[data-view="excluded"]').click();
+    await expectUncapped(page, excludedOfType.length);
+    await page.locator('[data-view="passing"]').click();
+    await expectUncapped(page, filtered({ type }).passing.length);
+
+    // A search that leaves 100 or fewer funds in the All view.
+    await page.locator("#type-filter").selectOption("");
+    await page.locator('[data-view="all"]').click();
+    await expectCapped(page, funds.length);
+    const code = funds[0].code;
+    const matching = funds.filter((f) => normalize(`${f.code} ${f.name} ${f.umbrella}`).includes(normalize(code)));
+    expect(matching.length).toBeLessThanOrEqual(ROW_LIMIT);
+    await page.locator("#search").fill(code);
+    await expectUncapped(page, matching.length);
+  });
+
+  test.describe(`with more than ${ROW_LIMIT} passing funds`, () => {
+    const many = withPassingFunds(committedData, ROW_LIMIT + 20).data;
+    const manyPassing = classifyFunds(many.funds).filter((f) => !f.reason);
+    test.use({ fundsData: many });
+
+    test("the Passing view is never capped", async ({ page }) => {
+      expect(manyPassing.length).toBeGreaterThan(ROW_LIMIT);
+      await page.goto("./");
+      await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(manyPassing.length)} funds pass`);
+      await expectUncapped(page, manyPassing.length);
+    });
+  });
+
+  test("Show all lasts through sorting, search, filters and clearing them, until the view changes", async ({
+    page,
+  }) => {
+    await open(page, "?view=all");
+    await showAll(page).click();
+    await expectUncapped(page, funds.length);
+
+    // Sorting.
+    await header(page, "code").getByRole("button").click();
+    await expect(header(page, "code")).toHaveAttribute("aria-sort", "ascending");
+    await expectUncapped(page, funds.length);
+
+    // Search, still matching every fund rather than only the rows on screen.
+    const last = (await codeLinks(page).allTextContents()).at(-1);
+    await page.locator("#search").fill("portföy");
+    const matching = funds.filter((f) => normalize(`${f.code} ${f.name} ${f.umbrella}`).includes("portföy"));
+    expect(matching.length).toBeGreaterThan(ROW_LIMIT);
+    await expectUncapped(page, matching.length);
+    await page.locator("#search").fill(last);
+    await expect(codeLinks(page).filter({ hasText: last })).toHaveCount(1);
+    await page.locator("#search").fill("");
+    await expectUncapped(page, funds.length);
+
+    // Type and risk filters, and clearing them from the empty table.
+    await page.locator("#risk-filter").selectOption("6");
+    await expectUncapped(page, filtered({ risk: "6" }).all.length);
+    await page.locator("#search").fill("no fund is called this");
+    await expect(page.locator("#clear-filters")).toBeVisible();
+    await page.locator("#clear-filters").click();
+    await expectUncapped(page, funds.length);
+
+    // Another view starts capped, and so does coming back.
+    await page.locator('[data-view="excluded"]').click();
+    await expectCapped(page, excluded.length);
+    await showAll(page).click();
+    await expectUncapped(page, excluded.length);
+    await page.locator('[data-view="all"]').click();
+    await expectCapped(page, funds.length);
+  });
+
+  test("a change filter or summary link that switches view caps again", async ({ page }) => {
+    const { previous } = previousData();
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previous }));
+    await open(page, "?view=excluded");
+    await expect(page.locator("#change-filter")).toBeVisible();
+    await showAll(page).click();
+    await expectUncapped(page, excluded.length);
+    // The change filter switches to the Passing view, and the summary link back to Excluded.
+    await page.locator("#change-filter").selectOption("entered");
+    await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#change-filter").selectOption("");
+    await page.locator('[data-view="excluded"]').click();
+    await expectCapped(page, excluded.length);
+    await showAll(page).click();
+    await page.locator("#changes a[data-changed='entered']").click();
+    await expect(page.locator('[data-view="passing"]')).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#change-filter").selectOption("");
+    await page.locator('[data-view="excluded"]').click();
+    await expectCapped(page, excluded.length);
+  });
+
+  test("Show all is not written to the URL", async ({ page }) => {
+    await open(page, "?view=all&sort=sharpe&dir=asc");
+    const before = page.url();
+    const historyLength = await page.evaluate(() => history.length);
+    await showAll(page).click();
+    await expectUncapped(page, funds.length);
+    expect(page.url()).toBe(before);
+    expect(await page.evaluate(() => history.length)).toBe(historyLength);
+    expect(params(page)).toEqual({ view: "all", sort: "sharpe", dir: "asc" });
+
+    // A reload opens capped again.
+    await page.reload();
+    await expectCapped(page, funds.length);
+  });
+
+  for (const key of ["Enter", "Space"]) {
+    test(`Show all works from the keyboard with ${key}`, async ({ page }) => {
+      await open(page, "?view=excluded");
+      // Tab from the last code link reaches the button.
+      await codeLinks(page).nth(ROW_LIMIT - 1).focus();
+      await page.keyboard.press("Tab");
+      await expect(showAll(page)).toBeFocused();
+      await page.keyboard.press(key);
+      await expectUncapped(page, excluded.length);
+      await expect(codeLinks(page).nth(ROW_LIMIT)).toBeFocused();
+    });
+  }
+
+  test("the cap line and button fit a 320 px screen", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page, "?view=all");
+    await expectCapped(page, funds.length);
+    await showAll(page).scrollIntoViewIfNeeded();
+    const box = await showAll(page).boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(320);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
 });
 
 test.describe("URL state", () => {
@@ -329,16 +531,16 @@ test.describe("type and risk filters", () => {
     await expectCounts(page, both);
     await expect(rows(page)).toHaveCount(both.passing.length);
     await page.locator('[data-view="excluded"]').click();
-    await expect(rows(page)).toHaveCount(both.excluded.length);
+    await showEveryRow(page, both.excluded.length);
     await page.locator('[data-view="all"]').click();
-    await expect(rows(page)).toHaveCount(both.all.length);
+    await showEveryRow(page, both.all.length);
     await expectRows(page, { type: TYPE, risk: RISK });
     await expectGlobalSummary(page);
 
     // A risk filter never shows funds without a risk level.
     await typeFilter(page).selectOption("");
     await expectCounts(page, byRisk);
-    await expect(rows(page)).toHaveCount(byRisk.all.length);
+    await showEveryRow(page, byRisk.all.length);
     await expect(page.locator("#funds tbody td.col-risk", { hasText: "—" })).toHaveCount(0);
     await expectRows(page, { risk: RISK });
 
@@ -355,7 +557,7 @@ test.describe("type and risk filters", () => {
     await typeFilter(page).selectOption("");
     await riskFilter(page).selectOption("");
     await expectCounts(page, { passing, excluded, all: funds });
-    await expect(rows(page)).toHaveCount(funds.length);
+    await showEveryRow(page, funds.length);
   });
 
   test("are written to the URL and restored from it", async ({ page }) => {
@@ -374,7 +576,7 @@ test.describe("type and risk filters", () => {
     await expect(page.locator("#pass-sticker")).toHaveText(`${formatCount(passing.length)} funds pass`);
     await expect(typeFilter(page)).toHaveValue(TYPE);
     await expect(riskFilter(page)).toHaveValue(RISK);
-    await expect(rows(page)).toHaveCount(filtered({ type: TYPE, risk: RISK }).all.length);
+    await showEveryRow(page, filtered({ type: TYPE, risk: RISK }).all.length);
 
     await typeFilter(page).selectOption("");
     await riskFilter(page).selectOption("");
@@ -401,7 +603,7 @@ test.describe("type and risk filters", () => {
     await open(page, "?view=all&type=No+Such+Type&risk=9");
     await expect(typeFilter(page)).toHaveValue("");
     await expect(riskFilter(page)).toHaveValue("");
-    await expect(rows(page)).toHaveCount(funds.length);
+    await showEveryRow(page, funds.length);
     await expectCounts(page, { passing, excluded, all: funds });
     await expect.poll(() => params(page)).toEqual({ view: "all" });
 
@@ -476,11 +678,12 @@ test.describe("4-week price line", () => {
     await expect(lines(page)).toHaveCount(withLine(passing).length);
 
     await page.locator('[data-view="excluded"]').click();
+    await showEveryRow(page, excluded.length);
     await expect(trendCells(page)).toHaveCount(excluded.length);
     await expect(lines(page)).toHaveCount(withLine(excluded).length);
 
     await page.locator('[data-view="all"]').click();
-    await expect(rows(page)).toHaveCount(funds.length);
+    await showEveryRow(page, funds.length);
     await expect(lines(page)).toHaveCount(withLine(funds).length);
     await expect(trendCells(page).filter({ hasText: "—" })).toHaveCount(funds.length - withLine(funds).length);
     // Each line is one or a few polylines, and none of them has NaN in it.
@@ -551,6 +754,169 @@ test.describe("4-week price line", () => {
     await open(page);
     await expect(lines(page).first()).toBeAttached();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
+test.describe("the pinned Code column", () => {
+  const { previous, changes } = previousData();
+  // A fund that left and still has a row (in the Excluded and All views).
+  const leftCode = changes.left.find((code) => !changes.gone.includes(code));
+  const wrap = (page) => page.locator(".table-wrap");
+
+  test.beforeEach(async ({ page }) => {
+    // NEW and LEFT badges next to some codes.
+    await page.route("**/data/previous.json", (route) => route.fulfill({ json: previous }));
+  });
+
+  // Scrolls the table fully to the right and the page down to the table.
+  async function scrollTableRight(page) {
+    await wrap(page).evaluate((el) => {
+      el.scrollIntoView();
+      el.scrollLeft = el.scrollWidth;
+    });
+  }
+
+  // Where the code cells should be (the wrapper's left edge, inside its
+  // border) and what each of `cells` looks like: its left edge, and whether
+  // it is the element drawn at its own centre (not a scrolled cell over it).
+  const pinnedGeometry = (page, cells) =>
+    page.evaluate((selector) => {
+      const wrapper = document.querySelector(".table-wrap");
+      const edge = wrapper.getBoundingClientRect().left + wrapper.clientLeft;
+      const cells = [...document.querySelectorAll(selector)].map((cell) => {
+        const box = cell.getBoundingClientRect();
+        const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return { text: cell.textContent, left: box.left, onTop: cell.contains(top) };
+      });
+      return { edge, scrollLeft: wrapper.scrollLeft, cells };
+    }, cells);
+
+  for (const width of [320, 393]) {
+    for (const view of ["passing", "excluded", "all"]) {
+      test(`stays at the left edge at ${width} px in the ${view} view when the table scrolls sideways`, async ({
+        page,
+      }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await open(page, view === "passing" ? "" : `?view=${view}`);
+        await scrollTableRight(page);
+        // The header cell and the first rows on screen.
+        const { edge, scrollLeft, cells } = await pinnedGeometry(
+          page,
+          "#funds thead th.col-code, #funds tbody tr:nth-child(-n+5) td.col-code",
+        );
+        // Scrolled far past the Code column.
+        expect(scrollLeft).toBeGreaterThan(500);
+        expect(cells).toHaveLength(6);
+        for (const cell of cells) {
+          expect(cell.left, cell.text).toBeCloseTo(edge, 0);
+          expect(cell.onTop, `${cell.text} is drawn over the scrolled cells`).toBe(true);
+        }
+        // Still no horizontal page scroll.
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      });
+    }
+  }
+
+  for (const [view, code, text] of [
+    ["passing", changes.entered[0], "NEW"],
+    ["excluded", leftCode, "LEFT"],
+  ]) {
+    test(`keeps the ${text} badge next to the code in the pinned cell`, async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 800 });
+      await open(page, view === "passing" ? "" : `?view=${view}`);
+      await page.locator("#search").fill(code);
+      await expect(rows(page)).toHaveCount(1);
+      await scrollTableRight(page);
+      const cell = page.locator("#funds tbody td.col-code");
+      await expect(cell.locator("a")).toHaveText(code);
+      await expect(cell.locator(".badge")).toHaveText(text);
+      const geometry = await cell.evaluate((td) => {
+        const wrapper = document.querySelector(".table-wrap");
+        const box = (el) => el.getBoundingClientRect();
+        const badge = td.querySelector(".badge");
+        const b = box(badge);
+        return {
+          edge: box(wrapper).left + wrapper.clientLeft,
+          cell: box(td),
+          link: box(td.querySelector("a")),
+          badge: b,
+          badgeOnTop: badge.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)),
+        };
+      });
+      expect(geometry.cell.left).toBeCloseTo(geometry.edge, 0);
+      // The badge is on the code's line, inside the pinned cell, and drawn.
+      expect(geometry.badge.left).toBeGreaterThan(geometry.link.right);
+      expect(geometry.badge.top).toBeLessThan(geometry.link.bottom);
+      expect(geometry.badge.right).toBeLessThanOrEqual(geometry.cell.right);
+      expect(geometry.badgeOnTop).toBe(true);
+    });
+  }
+
+  test("keeps the column widths at 1280 px", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await open(page, "?view=all");
+    const widths = () =>
+      page.locator("#header-row th").evaluateAll((ths) => ths.map((th) => th.getBoundingClientRect().width));
+    const pinned = await widths();
+    // The same table without the pinning.
+    await page.addStyleTag({ content: ".col-code { position: static !important; }" });
+    expect(await widths()).toEqual(pinned);
+  });
+
+  test("Tab and Shift+Tab bring each header into view clear of the pinned column at 320 px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await open(page, "?view=excluded");
+    await wrap(page).evaluate((el) => el.scrollIntoView());
+    const keys = await page
+      .locator("#header-row th button")
+      .evaluateAll((buttons) => buttons.map((b) => b.textContent));
+    expect(keys.at(-1)).toBe("Reason");
+
+    // Where the focused header is, against the pinned column and the wrapper.
+    const focused = () =>
+      page.evaluate(() => {
+        const el = document.activeElement;
+        const wrapper = document.querySelector(".table-wrap");
+        const box = el.getBoundingClientRect();
+        const pinned = document.querySelector("#header-row th.col-code").getBoundingClientRect();
+        const top = document.elementFromPoint(box.left + 6, box.top + box.height / 2);
+        return {
+          text: el.textContent,
+          left: box.left,
+          right: box.right,
+          width: box.width,
+          pinnedRight: pinned.right,
+          wrapRight: wrapper.getBoundingClientRect().left + wrapper.clientLeft + wrapper.clientWidth,
+          leftEdgeShows: el.contains(top),
+        };
+      });
+    const expectClear = (f) => {
+      expect(f.left, `${f.text} starts right of the pinned column`).toBeGreaterThanOrEqual(f.pinnedRight - 1);
+      expect(f.leftEdgeShows, `${f.text}'s left edge is not under the pinned column`).toBe(true);
+      // Fully in view when it fits next to the pinned column.
+      if (f.width <= f.wrapRight - f.pinnedRight) {
+        expect(f.right, `${f.text} ends inside the wrapper`).toBeLessThanOrEqual(f.wrapRight + 1);
+      }
+    };
+
+    await page.locator("#header-row th.col-code button").focus();
+    for (const key of keys.slice(1)) {
+      await page.keyboard.press("Tab");
+      const f = await focused();
+      expect(f.text).toBe(key);
+      expectClear(f);
+    }
+    // The Reason header fits beside the pinned column, so it shows in full.
+    const reason = await focused();
+    expect(reason.right).toBeLessThanOrEqual(reason.wrapRight + 1);
+
+    // And back, which scrolls left.
+    for (const key of keys.slice(1, -1).reverse()) {
+      await page.keyboard.press("Shift+Tab");
+      const f = await focused();
+      expect(f.text).toBe(key);
+      expectClear(f);
+    }
   });
 });
 
@@ -780,11 +1146,13 @@ test.describe("changes since the previous update", () => {
       await expect(badges(page, "LEFT")).toHaveCount(0);
 
       await page.locator('[data-view="excluded"]').click();
+      await showEveryRow(page, excluded.length);
       await expect(badges(page, "LEFT")).toHaveCount(stillListed.length);
       expect(await badgeCodes(page, "LEFT")).toEqual(stillListed);
       await expect(badges(page, "NEW")).toHaveCount(0);
 
       await page.locator('[data-view="all"]').click();
+      await showEveryRow(page, funds.length);
       await expect(badges(page, "NEW")).toHaveCount(changes.entered.length);
       await expect(badges(page, "LEFT")).toHaveCount(stillListed.length);
     });
@@ -1080,7 +1448,10 @@ test.describe("changes since the previous update", () => {
       await expect.poll(() => params(page), label).toEqual({ view: "all" });
       await expect(changeFilter(page), label).toBeHidden();
       await expect(summary(page), label).toBeHidden();
-      await expect(rows(page), label).toHaveCount(funds.length);
+      await expect(rows(page), label).toHaveCount(Math.min(funds.length, ROW_LIMIT));
+      await expect(page.locator("#more-rows-message"), label).toHaveText(
+        `Showing the first ${ROW_LIMIT} of ${formatCount(funds.length)} funds.`,
+      );
       await expectCounts(page, { passing: passing.length, excluded: excluded.length });
       expect(errors.filter((text) => !text.startsWith("Failed to load resource")), label).toEqual([]);
     }
@@ -1099,7 +1470,8 @@ test.describe("the empty table", () => {
 
   // After a reset: the view and sort stay, the filters and search are clear.
   async function expectCleared(page) {
-    await expect(rows(page)).toHaveCount(excluded.length);
+    await expect(rows(page)).toHaveCount(Math.min(excluded.length, ROW_LIMIT));
+    await expect(page.locator("#show-all")).toHaveText(`Show all ${formatCount(excluded.length)} funds`);
     await expect(page.locator("#empty")).toBeHidden();
     await expect(page.locator('[data-view="excluded"]')).toHaveAttribute("aria-pressed", "true");
     await expect(header(page, "sharpe")).toHaveAttribute("aria-sort", "ascending");
@@ -1286,7 +1658,9 @@ test.describe("CSV download", () => {
   }) => {
     await open(page, `?view=all&type=${encodeURIComponent(TYPE).replace(/%20/g, "+")}&sort=sharpe&dir=asc`);
     const expected = filtered({ type: TYPE }).all;
-    await expect(rows(page)).toHaveCount(expected.length);
+    // The first ROW_LIMIT on screen, but every matching fund in the file.
+    const shown = Math.min(expected.length, ROW_LIMIT);
+    await expect(rows(page)).toHaveCount(shown);
     await expect(button(page)).toBeEnabled();
     const file = await download(page);
 
@@ -1296,6 +1670,8 @@ test.describe("CSV download", () => {
     const [header, ...body] = file.rows;
     expect(header).toEqual([...PASSING_HEADER, "Reason"]);
     expect(body).toHaveLength(expected.length);
+    expect(body.slice(0, shown).map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+    await showEveryRow(page, expected.length);
     expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
 
     // Lowest Sharpe first, funds without one last, as the table sorts them.
@@ -1338,11 +1714,15 @@ test.describe("CSV download", () => {
 
   test("the Excluded view keeps every excluded fund with its reason and Turkish names intact", async ({ page }) => {
     await open(page, "?view=excluded");
+    // The table shows the first ROW_LIMIT rows; the file has every excluded fund.
+    await expect(rows(page)).toHaveCount(ROW_LIMIT);
     const file = await download(page);
     expect(file.name).toBe(`tefas-funds-excluded-${day}.csv`);
     const [header, ...body] = file.rows;
     expect(header).toEqual([...PASSING_HEADER, "Reason"]);
     expect(body).toHaveLength(excluded.length);
+    expect(body.slice(0, ROW_LIMIT).map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
+    await showEveryRow(page, excluded.length);
     expect(body.map((r) => r[0])).toEqual(await codeCells(page).allTextContents());
     for (const row of body) expect(row).toEqual(expectedRow(byCode.get(row[0]), true));
     // Names with Turkish capitals (İ, Ş, Ğ, Ö, Ü, Ç) come through as they are in the data.
@@ -1422,6 +1802,7 @@ test.describe("Sharpe ratios based on less than six months", () => {
     expect(short.length).toBeGreaterThan(0);
     expect(short.length).toBeLessThan(funds.filter((f) => f.sharpe !== null).length);
     await open(page, "?view=all");
+    await showEveryRow(page, funds.length);
     await expect(notes(page)).toHaveCount(short.length);
 
     const fund = short[0];
@@ -1513,7 +1894,7 @@ test.describe("whatever the day's data", () => {
         }
 
         await page.locator('[data-view="excluded"]').click();
-        await expect(rows(page)).toHaveCount(excluded.length);
+        await showEveryRow(page, excluded.length);
         await expect(page.locator("#funds tbody td.col-reason:empty")).toHaveCount(0);
 
         // The committed previous update, compared with this data.
@@ -1521,7 +1902,7 @@ test.describe("whatever the day's data", () => {
           const changes = membershipChanges(all, classifyFunds(committedPrevious.funds));
           await expect(page.locator("#changes")).toHaveText(changesSummary(changes, committedPrevious.fetchedAt));
           await page.locator('[data-view="all"]').click();
-          await expect(rows(page)).toHaveCount(all.length);
+          await showEveryRow(page, all.length);
           await expect(page.locator("#funds tbody td.col-code .badge", { hasText: "NEW" })).toHaveCount(
             changes.entered.length,
           );

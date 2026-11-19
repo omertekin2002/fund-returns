@@ -5,6 +5,7 @@ import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { emptyMessage, inView } from "./empty.js";
 import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
+import { cappedText, ROW_LIMIT, showAllText, visibleRows } from "./rowlimit.js";
 import { ruleCounts, ruleCountsNote, ruleCountText } from "./rulecounts.js";
 import { HEIGHT, polylinePoints, recentCount, recentPrices, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
@@ -21,6 +22,11 @@ const state = {
   // Whether those changes have loaded. Until then a change filter from the
   // URL (state.changed) is kept but not applied, and its select is hidden.
   changesLoaded: false,
+  // Whether the reader pressed Show all, so the Excluded and All views build
+  // every row instead of the first ROW_LIMIT. Kept through sorting, search and
+  // filters, reset when the view changes, and never written to the URL, so a
+  // shared or reloaded link always opens fast.
+  showAll: false,
   ...parseState(location.search),
 };
 
@@ -39,6 +45,9 @@ const els = {
   empty: document.getElementById("empty"),
   emptyMessage: document.getElementById("empty-message"),
   clearFilters: document.getElementById("clear-filters"),
+  moreRows: document.getElementById("more-rows"),
+  moreRowsMessage: document.getElementById("more-rows-message"),
+  showAll: document.getElementById("show-all"),
   search: document.getElementById("search"),
   download: document.getElementById("download-csv"),
   typeFilter: document.getElementById("type-filter"),
@@ -211,10 +220,15 @@ function sparklineSvg(trend) {
   return svg;
 }
 
+// Builds the rows for the view's first ROW_LIMIT funds in the Excluded and
+// All views (every fund once the reader pressed Show all, and always in the
+// Passing view). The counts, the empty message and the CSV still use every
+// selected fund.
 function renderBody() {
   const columns = visibleColumns();
   const funds = selectedFunds();
-  const rows = funds.map((fund) => {
+  const { shown, hidden } = visibleRows(state.view, funds, state.showAll);
+  const rows = shown.map((fund) => {
     const tr = document.createElement("tr");
     for (const col of columns) {
       const td = document.createElement("td");
@@ -256,6 +270,7 @@ function renderBody() {
   });
   els.body.replaceChildren(...rows);
   renderEmpty(funds.length === 0);
+  renderMoreRows(shown.length, funds.length, hidden > 0);
   // Nothing to download while no fund matches.
   els.download.disabled = funds.length === 0;
 }
@@ -272,6 +287,23 @@ function renderEmpty(isEmpty) {
   els.clearFilters.hidden = !reset;
 }
 
+// Under a capped table, says how many rows it shows of how many, with a
+// button that shows them all. Set with textContent.
+function renderMoreRows(shown, total, isCapped) {
+  els.moreRows.hidden = !isCapped;
+  if (!isCapped) return;
+  els.moreRowsMessage.textContent = cappedText(shown, total);
+  els.showAll.textContent = showAllText(total);
+}
+
+// Shows every row. The button disappears with the cap line, so focus moves to
+// the code link of the first newly shown row, where the reader carries on.
+function showAllRows() {
+  state.showAll = true;
+  renderBody();
+  els.body.rows[ROW_LIMIT]?.querySelector("td.col-code a")?.focus();
+}
+
 // Clears the type, risk and change filters and the search, keeping the view
 // and the sort. The button disappears with the empty message, so focus moves
 // to the search box.
@@ -285,7 +317,8 @@ function clearFilters() {
   els.search.focus();
 }
 
-// Downloads the rows the table shows, in its order, as a CSV file.
+// Downloads every fund the view, filters and search select, in table order, as
+// a CSV file, including rows the table doesn't show yet.
 function downloadCsv() {
   const funds = selectedFunds();
   if (funds.length === 0) return;
@@ -318,9 +351,11 @@ function renderCounts() {
 // funds that left are all excluded.
 const CHANGE_VIEWS = { entered: "passing", left: "excluded" };
 
-// The state s in another view, dropping a sort that view can't use.
+// The state s in another view, dropping a sort that view can't use. A new
+// view starts capped again (see rowlimit.js).
 function withView(s, view) {
   const next = { ...s, view };
+  if (view !== s.view) next.showAll = false;
   if (!canSortBy(view, next.sortKey)) {
     next.sortKey = DEFAULT_STATE.sortKey;
     next.sortDir = DEFAULT_STATE.sortDir;
@@ -361,6 +396,22 @@ function trendOf(prices, days) {
   return { points: line.segments.map(polylinePoints), label: sparklineLabel(line.change) };
 }
 
+// When a header button gets focus while the table is scrolled sideways, moves
+// it clear of the pinned Code column, and fully into view when it fits.
+// Browsers leave a partly visible element where it is, which here could be
+// under the pinned column with its label hidden.
+function revealFocusedHeader(event) {
+  const button = event.target;
+  const pinned = els.headerRow.querySelector("th.col-code");
+  if (!(button instanceof HTMLButtonElement) || !pinned || pinned.contains(button)) return;
+  const wrap = els.headerRow.closest(".table-wrap");
+  const box = button.getBoundingClientRect();
+  const left = pinned.getBoundingClientRect().right;
+  const right = wrap.getBoundingClientRect().left + wrap.clientLeft + wrap.clientWidth;
+  if (box.left < left) wrap.scrollLeft -= left - box.left;
+  else if (box.right > right) wrap.scrollLeft += Math.min(box.right - right, box.left - left);
+}
+
 async function init() {
   els.search.value = state.query;
   els.search.addEventListener("input", () => {
@@ -377,6 +428,8 @@ async function init() {
   els.riskFilter.value = state.risk;
   els.download.addEventListener("click", downloadCsv);
   els.clearFilters.addEventListener("click", clearFilters);
+  els.showAll.addEventListener("click", showAllRows);
+  els.headerRow.addEventListener("focusin", revealFocusedHeader);
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],

@@ -19,6 +19,21 @@ so links can be shared (see [`site/urlstate.js`](site/urlstate.js)). A type
 that matches no fund, a risk outside 1–7, or a `changed` other than `entered`
 or `left` is ignored.
 
+The Excluded and All views list about a thousand funds, which takes over a
+second to lay out on a mid-range phone, so they show the first 100 rows of
+the sorted, filtered list, with a line such as "Showing the first 100 of 1,075
+funds." and a **Show all 1,075 funds** button under the table (see
+[`site/rowlimit.js`](site/rowlimit.js)). The button shows every row and moves
+focus to the first newly shown one. The view counts, the search, the filters,
+the sort and the CSV still cover every matching fund; only the rows on screen
+are capped. The Passing view, and any list of 100 funds or fewer, shows every
+row. Once pressed, every row stays shown through sorting, search, filters and
+**Clear filters and search**, until the view changes (with the view buttons, a
+link in the changes summary, or a change filter that switches view). It isn't
+kept in the URL, so a shared or reloaded link opens with the first 100 rows.
+Until **Show all** is pressed, the browser's find-in-page only finds the rows
+on screen; the page's search box finds every fund.
+
 When the table has no rows, the line under it says why (see
 [`site/empty.js`](site/empty.js)):
 
@@ -162,10 +177,16 @@ highest price, so heights can't be compared between rows. Screen readers read
 the change from the first to the last price, e.g. "Price over 4 weeks: up
 2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
 
+On a narrow screen, such as a phone, the table scrolls sideways to reach this
+and the other columns. The **Code** column stays at the table's left edge while
+it does, so every row still says which fund it is.
+
 ## Download
 
-**Download CSV** above the table saves the rows the table shows, in the same
-order (view, type and risk filters, search and sort), as a CSV file named
+**Download CSV** above the table saves every fund that matches the view, type,
+risk and change filters and the search, in table order (sort), including the
+rows the Excluded and All views don't show until **Show all** is pressed, as a
+CSV file named
 `tefas-funds-<view>-<YYYY-MM-DD>.csv`, dated with the day the data was
 fetched (Istanbul time). It has the table's columns except the 4-week line,
 so the Passing view's file has no Reason column. The file is written by
@@ -217,9 +238,21 @@ The button is disabled until the data has loaded, and while no fund matches.
   `update.yml` runs the same two jobs on a push to `main` and deploys only
   after both pass, so a code change that breaks a test doesn't go live.
   Data runs (the 10:15 trigger, the fallback schedule and manual runs) don't
-  run the tests, so they never hold back the daily update. That leaves a gap:
-  a pushed commit whose tests failed is still deployed by the next data run,
-  unless it is fixed or reverted first.
+  run the tests, so they never hold back the daily update, but they don't
+  deploy untested code either.
+  [`scripts/deploy_source.py`](scripts/deploy_source.py) finds the last
+  commit on `main` whose push run of the tests passed. If only `site/data/`
+  changed since (the usual day), the data run deploys `site/` as it is.
+  Otherwise, while newer code's tests have failed or are still running, it
+  deploys `site/` from that commit with the new `site/data/`, and the run's
+  summary and a warning name both commits; the newer code goes live once its
+  tests pass. If no such commit is found, or the check itself fails, it
+  deploys `site/` as it is and warns. The data commit is the same either way.
+- [`.github/dependabot.yml`](.github/dependabot.yml) has Dependabot propose
+  updates for the GitHub Actions the workflows use and the npm dev
+  dependencies (Playwright and axe): once a month, at most one grouped PR for
+  each, and only for releases at least 7 days old. Those PRs run `test.yml`
+  like any other PR (read-only token) and wait for the owner to merge them.
 
 The page's look follows [`DESIGN.md`](DESIGN.md) (a Dell 1996 catalog style:
 black page frame, flat colour blocks, Arial Black headings over Times body).
@@ -285,21 +318,23 @@ cron-job.org job on purpose, close the issue by hand.
 ```sh
 npm run fetch   # download fresh data into site/data/funds.json
 npm run serve   # http://localhost:8000
-npm test        # unit tests (Node 20+ and Python 3.9+)
+npm test        # unit tests (Node 22.12+ and Python 3.9+)
 npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 ```
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
 ratio, price line, data freshness, coverage, URL state, changes, CSV, empty
-table message, rule card count and data fixture tests
+table message, rule card count, row limit and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing, validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
-and the trigger check tests
-cover its decision with fixture `gh run list` output, so they need no network
-and no packages.
+the trigger check tests
+cover its decision with fixture `gh run list` output, and the deploy source
+tests cover the choice of code to deploy with fixture `gh run list` output
+and a throwaway git repository, so they need no network and no packages
+(only `git`).
 
 `npm test` needs no `npm install`. The page tests do: run `npm ci` and
 `npx playwright install chromium` once, then `npm run test:e2e`. They serve
@@ -325,7 +360,12 @@ rule cards match the numbers worked out from the data with `filter.js` and
 `sharpe.js`, worded as first failures (e.g. "212 funds out here first."), and
 that the line under The Criteria gives the Excluded count as the total the
 cards add up to and fits a 320 px screen; that the table lists the right rows (with a Reason column only
-for excluded funds); that search and column sorting work, and are kept in
+for excluded funds); that the Excluded and All views show the first 100 rows of
+the sorted list with a **Show all** button naming the full count, which shows
+every row and focuses the first new one from the mouse or keyboard, lasts
+through sorting, search and filters until the view changes, stays out of the
+URL and fits a 320 px screen, while the Passing view and lists of 100 or fewer
+are never capped; that search and column sorting work, and are kept in
 and restored from the URL; that every fund with two prices has a labelled
 4-week price line (and the rest show `—`), and that its column can't be
 sorted; that an empty table says no fund passes all six rules when none does
@@ -348,18 +388,25 @@ filter and the summary's links show exactly the funds that entered or left
 in the view that lists them (the filter combining with the other filters, the
 links clearing them), work from the keyboard and at 320 px wide, are
 kept in and restored from the URL, and are dropped from the URL when
-`previous.json` is missing or broken; and that Download
+`previous.json` is missing or broken; that the Code column, with its `NEW` /
+`LEFT` badges, stays at the table's left edge over the other cells when the
+table is scrolled fully sideways at 320 and 393 px in every view, leaves the
+column widths at 1280 px as they were, and that a header reached with Tab or
+Shift+Tab at 320 px is scrolled clear of it; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
-and sort (with the right file name, byte order mark and raw numbers), is
+and sort, including the rows a capped view doesn't show yet (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
 wide. [`e2e/a11y.spec.js`](e2e/a11y.spec.js) checks accessibility: it runs
 [axe-core](https://github.com/dequelabs/axe-core) (through
 `@axe-core/playwright`) with the WCAG 2.0 and 2.1 A and AA rules, plus the
 rules that keep all content inside landmarks under one `<main>`, and expects
 no violations in the Passing, Excluded and All views at 1280 px (with the
-changes summary and badges), the Passing view at 320 px, a search that
+changes summary and badges, and in the Excluded and All views both with the
+Show all button and with every row), the Passing view and the All view with
+the Show all button at 320 px, a search that
 matches nothing, filters and a search that leave no fund (with the button that
 clears them), stale data and a failed data request; and it tabs through
-every control on the page, with rows and with the clear button showing, and
+every control on the page, with rows, with the Show all button and with the
+clear button showing, and
 checks that each one gets a focus outline with at least 3:1 contrast against
 the colour behind it.
