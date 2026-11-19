@@ -67,6 +67,12 @@
           <tbody></tbody>
         </table>
       </div>
+      <!-- Shown by app.js when the Excluded or All view leaves rows out (see
+           rowlimit.js): how many it shows, and a button that shows them all. -->
+      <div id="more-rows" class="more-rows" hidden>
+        <p id="more-rows-message"></p>
+        <button id="show-all" type="button" class="button-secondary">Show all</button>
+      </div>
       <!-- Filled by app.js when the table has no rows: why, and a button that
            clears the filters and search when they are the reason. -->
       <div id="empty" class="empty" hidden>

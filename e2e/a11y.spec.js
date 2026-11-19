@@ -5,6 +5,7 @@
 import { test, expect } from "./fixtures.js";
 import AxeBuilder from "@axe-core/playwright";
 import { committedData, data, formatCount, passing, previousData } from "./expected.js";
+import { ROW_LIMIT } from "../site/rowlimit.js";
 import { withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 
 // The WCAG 2.0 and 2.1 A and AA rules, plus the best-practice rules that keep
@@ -59,20 +60,36 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
   test.slow();
 
   // Each view at 1280 px, with the change summary and the NEW / LEFT badges.
-  for (const [view, badge] of [
-    ["passing", "NEW"],
-    ["excluded", "LEFT"],
-    ["all", "NEW"],
+  // The Excluded and All views are checked first with their first ROW_LIMIT
+  // rows and the Show all button, then with every row.
+  for (const [view, badge, capped] of [
+    ["passing", "NEW", false],
+    ["excluded", "LEFT", true],
+    ["all", "NEW", true],
   ]) {
     test(`in the ${view} view at 1280 px, with the change summary and badges`, async ({ page }) => {
       await page.setViewportSize({ width: 1280, height: 800 });
       await openWithChanges(page);
       await page.locator(`[data-view="${view}"]`).click();
       await expect(page.locator(`[data-view="${view}"]`)).toHaveAttribute("aria-pressed", "true");
+      if (capped) {
+        await expect(rows(page)).toHaveCount(ROW_LIMIT);
+        await expect(page.locator("#show-all")).toBeVisible();
+        await expectNoViolations(page);
+        await page.locator("#show-all").click();
+        await expect(page.locator("#more-rows")).toBeHidden();
+      }
       await expect(page.locator("#funds tbody .badge", { hasText: badge })).not.toHaveCount(0);
       await expectNoViolations(page);
     });
   }
+
+  test("in the All view at 320 px, with the Show all button", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await openWithChanges(page, "?view=all");
+    await expect(page.locator("#show-all")).toBeVisible();
+    await expectNoViolations(page);
+  });
 
   test("in the Passing view at 320 px", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 640 });
@@ -241,6 +258,12 @@ test("every focusable control shows a focus outline with 3:1 contrast against wh
   // A previous update adds the change filter and the summary's links.
   await openWithChanges(page);
   await expectFocusOutlines(page, [...CONTROLS, "#download-csv", "#funds tbody td.col-code a"]);
+});
+
+test("the Show all button shows a focus outline too", async ({ page }) => {
+  await openWithChanges(page, "?view=excluded");
+  await expect(page.locator("#show-all")).toBeVisible();
+  await expectFocusOutlines(page, [...CONTROLS, "#download-csv", "#funds tbody td.col-code a", "#show-all"]);
 });
 
 test("the button that clears the filters and search shows a focus outline too", async ({ page }) => {
