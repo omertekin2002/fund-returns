@@ -1,13 +1,23 @@
 // The fund table's columns, in display order. Each column's key is also the
 // name used for it in the page URL's sort parameter (see urlstate.js).
 // Columns with `sortable: false` have a plain header and can't be sorted by.
+// A `csvLabel` names the column in the CSV header instead of its label.
 import { HORIZONS } from "./filter.js";
+import { fundSize } from "./size.js";
 
 export const COLUMNS = [
   { key: "code", label: "Code", type: "text", value: (f) => f.code },
   { key: "name", label: "Fund", type: "text", value: (f) => f.name },
   { key: "umbrella", label: "Type", type: "text", value: (f) => f.umbrella },
   { key: "risk", label: "Risk", type: "number", value: (f) => f.risk },
+  {
+    key: "size",
+    label: "Size",
+    csvLabel: "Size (TL)",
+    type: "size",
+    value: fundSize,
+    title: "The fund's total value in TL on its latest price date",
+  },
   ...HORIZONS.map((h) => ({
     key: h.key,
     label: h.label,

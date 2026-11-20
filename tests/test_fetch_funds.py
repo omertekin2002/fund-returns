@@ -249,6 +249,75 @@ class ParsePricesTest(unittest.TestCase):
                 self.assertIn(repr([field]), str(caught.exception))
 
 
+@small_limits
+class ParseSizesTest(unittest.TestCase):
+    def sizes(self, rows, codes=CODES):
+        return fetch_funds.parse_sizes([{"resultList": rows}], codes)
+
+    def sized_row(self, code, day, size):
+        return {**price_row(code, day), "portfoyBuyukluk": size}
+
+    def test_takes_the_size_on_the_latest_date(self):
+        rows = [
+            self.sized_row("AAA", "2026-10-02", 1_163_000_000.25),
+            self.sized_row("AAA", "2026-09-30", 900_000_000),
+            self.sized_row("AAA", "2026-10-01", 1_000_000_000),
+            self.sized_row("BBB", "2026-09-30", 5_000_000),
+            self.sized_row("BBB", "2026-10-02", 6_000_000),
+            self.sized_row("CCC", "2026-10-01", 850_000),
+        ]
+        self.assertEqual(
+            self.sizes(rows),
+            {"AAA": 1_163_000_000.25, "BBB": 6_000_000, "CCC": 850_000},
+        )
+
+    def test_a_fund_missing_on_the_latest_date_takes_its_most_recent_earlier_value(self):
+        rows = [
+            self.sized_row("AAA", "2026-09-30", 100),
+            self.sized_row("AAA", "2026-10-01", 200),
+            # No row for AAA on the latest date; others have one.
+            self.sized_row("BBB", "2026-10-02", 300),
+        ]
+        self.assertEqual(self.sizes(rows)["AAA"], 200)
+
+    def test_the_latest_date_without_a_valid_size_falls_back_to_an_earlier_one(self):
+        for bad in [None, "", 0, "0", -5, "abc", [], {}, True, float("nan"), float("inf")]:
+            with self.subTest(bad=bad):
+                rows = [
+                    self.sized_row("AAA", "2026-10-01", 200),
+                    self.sized_row("AAA", "2026-10-02", bad),
+                ]
+                self.assertEqual(self.sizes(rows)["AAA"], 200)
+
+    def test_missing_empty_zero_or_garbage_values_give_none(self):
+        for bad in [None, "", 0, "0", -5, "abc", [], {}, True, float("nan")]:
+            with self.subTest(bad=bad):
+                rows = [self.sized_row("AAA", day, bad) for day in DATES]
+                self.assertEqual(self.sizes(rows)["AAA"], None)
+
+    def test_numbers_given_as_strings_are_read(self):
+        self.assertEqual(self.sizes([self.sized_row("AAA", DATES[0], "245300000.5")])["AAA"], 245_300_000.5)
+
+    def test_responses_without_the_field_still_parse(self):
+        raw = prices_response()
+        self.assertEqual(fetch_funds.parse_sizes([raw], CODES), {"AAA": None, "BBB": None, "CCC": None})
+        # And parse_prices doesn't need it either.
+        dates, _ = parse_prices(raw, CODES)
+        self.assertEqual(dates, DATES)
+
+    def test_gives_every_fund_a_size_and_ignores_codes_not_in_the_list(self):
+        rows = [self.sized_row("ZZZ", DATES[0], 10), self.sized_row("AAA", DATES[0], 20)]
+        self.assertEqual(self.sizes(rows, ["AAA", "DDD"]), {"AAA": 20, "DDD": None})
+
+    def test_joins_the_responses_of_the_window(self):
+        first = {"resultList": [self.sized_row("AAA", DATES[0], 10), self.sized_row("BBB", DATES[1], 30)]}
+        second = {"resultList": [self.sized_row("AAA", DATES[2], 20), self.sized_row("BBB", DATES[2], "")]}
+        self.assertEqual(
+            fetch_funds.parse_sizes([first, second], CODES),
+            {"AAA": 20, "BBB": 30, "CCC": None},
+        )
+
+
 class PriceRangesTest(unittest.TestCase):
     def test_splits_the_window_into_ranges_tefas_accepts(self):
         end = date(2026, 11, 10)
@@ -700,6 +769,18 @@ class MainTest(unittest.TestCase):
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
         self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
+
+    def test_writes_each_funds_size_from_its_latest_price_date(self):
+        prices = prices_response()
+        for row in prices["resultList"]:
+            if row["fonKodu"] == "AAA":
+                row["portfoyBuyukluk"] = {"2026-09-30": 1.0e9, "2026-10-01": 1.1e9, "2026-10-02": 1.16e9}[row["tarih"]]
+            elif row["fonKodu"] == "BBB":
+                row["portfoyBuyukluk"] = "garbage"
+        self.run_main([funds_response(), prices])
+        new = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual({f["code"]: f["size"] for f in new["funds"]}, {"AAA": 1.16e9, "BBB": None, "CCC": None})
+        self.assertEqual(list(new["funds"][0]), ["code", "name", "umbrella", "risk", "returns", "size", "prices"])
 
     def test_first_run_writes_no_previous(self):
         self.run_main()

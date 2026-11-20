@@ -7,7 +7,7 @@ import { dataCoverage } from "../site/coverage.js";
 import { RULES } from "../site/filter.js";
 import { RISK_FREE_UMBRELLA } from "../site/sharpe.js";
 import { recentCount, recentPrices, sparkline } from "../site/sparkline.js";
-import { withPassingFunds } from "../tests/fund-fixtures.mjs";
+import { withPassingFunds, withSizes } from "../tests/fund-fixtures.mjs";
 
 // The committed data/funds.json, as the daily update left it.
 export const committedData = JSON.parse(readFileSync(new URL("../site/data/funds.json", import.meta.url), "utf8"));
@@ -15,8 +15,8 @@ export const committedData = JSON.parse(readFileSync(new URL("../site/data/funds
 // The data every spec serves as data/funds.json (see fixtures.js): the
 // committed data with a few more funds made to pass (forcedCodes), so the
 // specs have passing and excluded funds to check however many funds pass on
-// the committed day, even none.
-export const { data, codes: forcedCodes } = withPassingFunds(committedData);
+// the committed day, even none, and with known sizes (see withSizes).
+export const { data, codes: forcedCodes } = withPassingFunds(withSizes(committedData));
 
 export const funds = classifyFunds(data.funds);
 

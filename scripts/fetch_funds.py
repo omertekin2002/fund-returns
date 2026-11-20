@@ -5,7 +5,8 @@ Fetches the same data as the export on TEFAS > Fon Getirileri > Menkul Kıymet
 Yatırım Fonları (https://www.tefas.gov.tr/tr/fon-getirileri?fundType=YAT),
 limited to funds traded on TEFAS (the page's default), plus each fund's daily
 prices over the last six months from TEFAS > Fon Verileri, which the website
-uses for the Sharpe ratio and the 4-week price line.
+uses for the Sharpe ratio and the 4-week price line, and each fund's size
+(total value in TL) on its latest price date.
 
 Usage: python3 scripts/fetch_funds.py [output_path]
 
@@ -21,6 +22,7 @@ compares against the last earlier day.
 
 import http.client
 import json
+import math
 import os
 import sys
 import tempfile
@@ -95,6 +97,9 @@ RETURN_FIELDS = {
 }
 REQUIRED_FIELDS = ["fonKodu", "fonUnvan", "fonTurAciklama", *RETURN_FIELDS]
 PRICE_FIELDS = ["fonKodu", "tarih", "fiyat"]
+# The fund's total value in TL, on the same price rows. Extra information: a
+# missing or invalid value never fails the update (see parse_sizes).
+SIZE_FIELD = "portfoyBuyukluk"
 
 # There are ~1000 traded YAT funds; far fewer means the response is broken.
 MIN_EXPECTED_FUNDS = 200
@@ -162,6 +167,17 @@ def to_price(value):
     price = to_number(value)
     # TEFAS reports 0 for some days a fund has no price.
     return price if price else None
+
+
+def to_size(value):
+    """A positive, finite size in TL, or None for anything else."""
+    if isinstance(value, bool):
+        return None
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return None
+    return size if math.isfinite(size) and size > 0 else None
 
 
 def result_rows(raw):
@@ -271,6 +287,30 @@ def parse_prices(responses, codes):
     }
 
 
+def parse_sizes(responses, codes):
+    """Return each fund code's size (total value in TL), or None.
+
+    A fund's size is its most recent positive portfoyBuyukluk in the window,
+    normally the one on the latest price date. Rows without the field, or with
+    an empty, zero or non-numeric value, are skipped, so a fund with no valid
+    value gets None. Never raises on the size values themselves: parse_prices
+    checks the responses.
+    """
+    latest = {}
+    for raw in responses:
+        for row in result_rows(raw):
+            if not isinstance(row, dict) or row.get("fonKodu") not in codes:
+                continue
+            size = to_size(row.get(SIZE_FIELD))
+            day = row.get("tarih")
+            if size is None or not isinstance(day, str):
+                continue
+            code = row["fonKodu"]
+            if code not in latest or day > latest[code][0]:
+                latest[code] = (day, size)
+    return {code: latest[code][1] if code in latest else None for code in codes}
+
+
 def render(funds, fetched_at, price_dates):
     header = {
         "fetchedAt": fetched_at,
@@ -353,10 +393,12 @@ def main():
 
     end = now.astimezone(ISTANBUL).date()
     start = end - timedelta(days=PRICE_WINDOW_DAYS)
-    price_dates, prices = parse_prices(
-        fetch_prices(start, end), [fund["code"] for fund in funds]
-    )
+    codes = [fund["code"] for fund in funds]
+    price_responses = fetch_prices(start, end)
+    price_dates, prices = parse_prices(price_responses, codes)
+    sizes = parse_sizes(price_responses, set(codes))
     for fund in funds:
+        fund["size"] = sizes[fund["code"]]
         fund["prices"] = prices[fund["code"]]
 
     fetched_at = now.isoformat().replace("+00:00", "Z")
@@ -364,9 +406,11 @@ def main():
     json.loads(text)  # sanity check that the hand-assembled JSON is valid
     rotate_previous(output, previous, fetched_at)
     write_atomically(output, text)
+    sized = sum(1 for fund in funds if fund["size"] is not None)
     print(
         f"Wrote {len(funds)} funds with prices for {len(price_dates)} dates "
-        f"({price_dates[0]} to {price_dates[-1]}) to {os.path.normpath(output)}"
+        f"({price_dates[0]} to {price_dates[-1]}) and sizes for {sized} funds "
+        f"to {os.path.normpath(output)}"
     )
 
 
