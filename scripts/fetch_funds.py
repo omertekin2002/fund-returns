@@ -103,6 +103,16 @@ SIZE_FIELD = "portfoyBuyukluk"
 
 # There are ~1000 traded YAT funds; far fewer means the response is broken.
 MIN_EXPECTED_FUNDS = 200
+# The returns the rules use. In the 44 editions from 2026-09-30 to 2026-11-20,
+# a return was missing or exactly 0 for at most 5.3% of funds for 1M, 6.8% for
+# 3M, 9.7% for 6M and 17.6% for 1Y. Far more means TEFAS sent an empty column.
+# YTD, 3Y and 5Y aren't in the rules (3Y and 5Y are missing for up to ~65% of
+# funds), so they aren't checked.
+RULE_RETURNS = ["1m", "3m", "6m", "1y"]
+MAX_MISSING_RETURN_PERCENT = 40
+# The fund count went from 1,070 to 1,076 over those editions and never fell
+# from one to the next, so a list much shorter than the last one is cut off.
+MIN_KEPT_FUNDS_PERCENT = 90
 
 ATTEMPTS = 4
 RETRY_DELAY_SECONDS = 20  # TEFAS rate-limits to a few requests per minute
@@ -219,8 +229,51 @@ def parse(raw):
         raise ValueError(
             f"Only {len(funds)} funds returned (expected at least {MIN_EXPECTED_FUNDS})"
         )
+    check_returns(funds)
     funds.sort(key=lambda fund: fund["code"])
     return funds
+
+
+def check_returns(funds):
+    """Raise ValueError if many funds lack a return the rules use.
+
+    A return counts as lacking when it is missing or exactly 0: the rules allow
+    a missing 3M, 6M or 1Y return, so an empty column would let funds pass.
+    """
+    for key in RULE_RETURNS:
+        lacking = sum(1 for fund in funds if not fund["returns"][key])
+        if lacking * 100 > MAX_MISSING_RETURN_PERCENT * len(funds):
+            raise ValueError(
+                f"{key.upper()} return missing or 0 for {lacking:,} of {len(funds):,} "
+                f"funds (more than {MAX_MISSING_RETURN_PERCENT}%); "
+                "TEFAS may have sent an empty column"
+            )
+
+
+def check_fund_count(funds, output):
+    """Raise ValueError if funds is much shorter than the existing output's list.
+
+    A missing, unreadable or invalid output file, or one without a funds list,
+    skips the check.
+    """
+    try:
+        with open(output, encoding="utf-8") as handle:
+            data = json.load(handle)
+        old_count = len(data["funds"]) if isinstance(data["funds"], list) else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return
+    if old_count is None or len(funds) * 100 >= MIN_KEPT_FUNDS_PERCENT * old_count:
+        return
+    old_fetched_at = data.get("fetchedAt")
+    since = (
+        f"the data fetched at {old_fetched_at}"
+        if isinstance(old_fetched_at, str)
+        else "the existing data"
+    )
+    raise ValueError(
+        f"Only {len(funds):,} funds returned, down from {old_count:,} in {since} "
+        f"(expected at least {MIN_KEPT_FUNDS_PERCENT}%)"
+    )
 
 
 def price_ranges(start, end):
@@ -390,6 +443,7 @@ def main():
     previous = os.path.join(os.path.dirname(output), "previous.json")
     now = datetime.now(timezone.utc).replace(microsecond=0)
     funds = parse(fetch_json(API_URL, PAYLOAD, PAGE_URL))
+    check_fund_count(funds, output)
 
     end = now.astimezone(ISTANBUL).date()
     start = end - timedelta(days=PRICE_WINDOW_DAYS)
