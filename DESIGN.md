@@ -454,6 +454,7 @@ Tight by modern standards. Catalog density wins over editorial breath — every 
 - Ribbon-card right-edge product photo notch becomes a top-aligned full-width image at mobile
 - The top banner's tagline ("BUILD YOUR OWN COMPUTER. ONLINE.") shrinks one type tier; the phone number wraps below the BUY-a-DELL sticker
 - Footer icon-label nav stays 4-up at all widths — the icons are small enough to survive
+- At ≤ 480 px, the fund table keeps every column but reorders them so the pinned Code is followed by the numbers the rules use (Reason in the Excluded and All views, then 1M, 3M, 6M, 1Y, Sharpe), with tighter 8 px cell padding; the rest follow in the desktop order (`PHONE_ORDER` in `site/columns.js`)
 
 #### Image Behavior
 Product photos are bitmap GIFs with hand-applied bevel shadows — they were authored at fixed pixel widths (typically 80–120 px wide). The right-edge notch effect was achieved by table-cell negative spacing. Modern reproductions should keep the bevel shadow effect (it's signature) but use SVG drop-shadow or CSS `filter: drop-shadow(2px 2px 0 #000)` to recreate it crisply at high-DPI.

@@ -609,4 +609,17 @@ td.col-sparkline {
   .button-secondary {
     flex: 1 1 auto;
   }
+
+  /* Narrower cells, so the Code and the rule numbers that follow it on
+     phones (PHONE_ORDER in columns.js) fit the first screen. */
+  td {
+    padding-right: var(--space-sm);
+    padding-left: var(--space-sm);
+  }
+
+  th button,
+  th > span {
+    padding-right: var(--space-sm);
+    padding-left: var(--space-sm);
+  }
 }

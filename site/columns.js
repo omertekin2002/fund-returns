@@ -43,8 +43,37 @@ export const COLUMNS = [
   { key: "reason", label: "Reason", type: "text", value: (f) => f.reason?.detail ?? "" },
 ];
 
-// The columns shown in a view: the Reason column only lists why a fund was
-// excluded, so the Passing view leaves it out.
-export function columnsFor(view) {
-  return view === "passing" ? COLUMNS.filter((c) => c.key !== "reason") : COLUMNS;
+// The table's order on a phone (PHONE_QUERY): the Code, then the numbers the
+// rules use (and why a fund was excluded), so they show on the first screen
+// without scrolling sideways; then the rest in their usual order.
+export const PHONE_ORDER = [
+  "code",
+  "reason",
+  "1m",
+  "3m",
+  "6m",
+  "1y",
+  "sharpe",
+  "name",
+  "umbrella",
+  "risk",
+  "size",
+  "ytd",
+  "3y",
+  "5y",
+  "trend",
+];
+
+// The screens that get PHONE_ORDER: the phone breakpoint in style.css.
+export const PHONE_QUERY = "(max-width: 480px)";
+
+const PHONE_COLUMNS = PHONE_ORDER.map((key) => COLUMNS.find((c) => c.key === key));
+
+// The columns shown in a view, in COLUMNS order, or in PHONE_ORDER with
+// `phone`. The Reason column only lists why a fund was excluded, so the
+// Passing view leaves it out. The order is for display only: the CSV calls
+// this without `phone`, so its columns keep the same order at every width.
+export function columnsFor(view, { phone = false } = {}) {
+  const columns = phone ? PHONE_COLUMNS : COLUMNS;
+  return view === "passing" ? columns.filter((c) => c.key !== "reason") : columns;
 }
