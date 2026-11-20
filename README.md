@@ -162,10 +162,22 @@ The **Sharpe** column is each fund's Sharpe ratio over the last six months of
 daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
 
 - A fund's daily return is its price change from one price date to the next.
-- The risk-free return for each day is the median daily return of the money
-  market funds (Para Piyasası Şemsiye Fonu) in the list. It follows the market
-  rate without being updated by hand, and covers weekends and holidays, when
-  money market funds earn several days of interest at once.
+- The risk-free return for each day is the average daily return of the
+  better-yielding half of the money market funds (Para Piyasası Şemsiye Fonu)
+  in the list. Someone parking cash in a money market fund can pick a good
+  one, so that is the return a riskier fund has to beat. It follows the
+  market rate without being updated by hand, and covers weekends and
+  holidays, when money market funds earn several days of interest at once.
+  - The money market funds are ranked by their geometric mean daily return,
+    `(∏(1 + r))^(1/n) − 1`, over the days each has a return, and the top half
+    is kept (rounded up: 2 of 3, 26 of 52). A fund launched partway through
+    the window ranks on the same footing as the others, and a price that
+    spikes and falls back doesn't rank high.
+  - Only funds with at least 21 daily returns are ranked, or every fund with
+    a return when none has that many. Ties go to the earlier fund code.
+  - Each day's risk-free return is the mean of the kept funds' returns that
+    day, leaving out kept funds without one. A day when none of them has a
+    return has no risk-free return.
 - The ratio is the mean of the daily excess returns (fund minus risk-free)
   divided by their standard deviation, annualised by multiplying by √252.
 - Funds with fewer than 21 daily returns in the window, about one month of

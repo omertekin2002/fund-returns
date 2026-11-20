@@ -29,7 +29,7 @@ export const COLUMNS = [
     label: "Sharpe",
     type: "ratio",
     value: (f) => f.sharpe,
-    title: "Sharpe ratio over the last 6 months of daily prices, annualised, against the median money market fund",
+    title: "Sharpe ratio over the last 6 months of daily prices, annualised, against the average of the better-yielding half of money market funds",
   },
   {
     key: "trend",
