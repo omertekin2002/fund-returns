@@ -241,8 +241,16 @@ The button is disabled until the data has loaded, and while no fund matches.
   deploys `site/` to GitHub Pages. cron-job.org starts it at 10:15 Istanbul
   time on weekdays (see [Daily trigger](#daily-trigger-cron-joborg)). Its own
   GitHub schedule (12:37 Istanbul time, Monday to Friday) is a fallback: it
-  does nothing if that day's data is already in, and otherwise fetches it,
-  usually a few hours late. If cron-job.org didn't start a run that day, the
+  fetches that day's data if it isn't in the repository yet, usually a few
+  hours late, and does nothing if it is in and the live site serves it. If
+  that day's data is committed but the site still serves an older
+  `data/funds.json` (or the fallback can't read the live file), the deploy
+  after the commit most likely failed: the fallback then republishes the
+  committed data, without fetching or committing, through the same choice of
+  tested code as any data run, and says so in the run's summary and a
+  warning.
+  [`scripts/fallback_action.py`](scripts/fallback_action.py) makes that
+  decision. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
   owner (see [Daily trigger](#daily-trigger-cron-joborg)). Pushes to `main`
   redeploy the site without fetching, after its `tests` job (the two jobs from

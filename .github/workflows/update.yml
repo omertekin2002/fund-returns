@@ -4,7 +4,8 @@ on:
   # A cron-job.org job starts this workflow through the API at 10:15
   # Istanbul time on weekdays (see README), because GitHub starts scheduled
   # runs hours late. This schedule (12:37 Istanbul, Mon-Fri) is only a
-  # fallback in case that call fails: it skips itself once today's data is in.
+  # fallback in case that call fails: it skips itself once today's data is in
+  # and live, and republishes today's committed data if its deploy failed.
   schedule:
     - cron: "37 9 * * 1-5"
   workflow_dispatch:
@@ -24,31 +25,85 @@ jobs:
     permissions:
       contents: write # commit the refreshed data file
       actions: read # list the test runs (see "Choose the code to deploy")
+      pages: read # look up the site's URL (see "Decide what the fallback does")
     outputs:
-      skip: ${{ steps.today.outputs.skip }}
+      skip: ${{ steps.today.outputs.action == 'skip' }}
     steps:
       - uses: actions/checkout@v7
 
-      # Read the data file from the tip of the branch, not the checkout: this
-      # run may have been queued before the 10:15 run committed.
-      - name: Check whether today's data is already in
+      # On the fallback schedule, scripts/fallback_action.py compares the data
+      # file at the tip of the branch (not the checkout: this run may have
+      # been queued before the 10:15 run committed) with the one the live site
+      # serves, and prints action=fetch (no edition for today yet), skip
+      # (today's edition is committed and live) or recover (today's edition
+      # is committed but its deploy failed: republish it without fetching).
+      # A failed probe of the site means recover; redeploying is harmless.
+      - name: Decide what the fallback does
         id: today
         if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --quiet --depth=1 origin "$GITHUB_REF_NAME"
-          fetched_at=$(git show FETCH_HEAD:site/data/funds.json \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["fetchedAt"])')
-          if [ "$(TZ=Europe/Istanbul date -d "$fetched_at" +%F)" = "$(TZ=Europe/Istanbul date +%F)" ]; then
-            echo "Data was already fetched today ($fetched_at); skipping."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          git show FETCH_HEAD:site/data/funds.json > "$RUNNER_TEMP/committed.json"
+          echo "tip=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+
+          # The site's URL from the API, or else the default Pages URL.
+          pages_url=$(timeout 20 gh api "repos/$GITHUB_REPOSITORY/pages" --jq .html_url 2>/dev/null || true)
+          if [ -z "$pages_url" ]; then
+            owner=${GITHUB_REPOSITORY_OWNER,,}
+            repo=${GITHUB_REPOSITORY#*/}
+            if [ "${repo,,}" = "$owner.github.io" ]; then
+              pages_url="https://$owner.github.io/"
+            else
+              pages_url="https://$owner.github.io/$repo/"
+            fi
+          fi
+          live_url="${pages_url%/}/data/funds.json?fallback=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(date +%s)"
+          echo "Live data: $live_url"
+          rm -f "$RUNNER_TEMP/live.json"
+          if ! curl --fail --silent --show-error --location --max-time 20 \
+              --header "Cache-Control: no-cache" \
+              --output "$RUNNER_TEMP/live.json" "$live_url"; then
+            echo "Couldn't read the live data file."
+            rm -f "$RUNNER_TEMP/live.json"
           fi
 
+          python3 scripts/fallback_action.py "$RUNNER_TEMP/committed.json" \
+            --live "$RUNNER_TEMP/live.json" | tee -a "$GITHUB_OUTPUT"
+
+      # Recover: deploy today's committed data with the code the data runs
+      # would deploy, through "Choose the code to deploy" below. Nothing is
+      # fetched or committed, so a second recovery deploys the same bundle.
+      - name: Use the committed edition
+        if: steps.today.outputs.action == 'recover'
+        env:
+          TIP: ${{ steps.today.outputs.tip }}
+          LIVE: ${{ steps.today.outputs.live }}
+          COMMITTED: ${{ steps.today.outputs.committed }}
+        run: |
+          git reset --quiet --hard "$TIP"
+          if [ -n "$LIVE" ]; then
+            live="the site serves the data fetched at $LIVE"
+          else
+            live="the site's data file couldn't be read"
+          fi
+          msg="Today's data (fetched at $COMMITTED) is committed but $live, so this run republishes the committed data without fetching. The deploy after today's data commit probably failed."
+          echo "::warning title=Republished today's data::$msg"
+          {
+            echo "### Republished today's data"
+            echo
+            echo "$msg"
+            echo
+            echo "Committed data: \`$(git rev-parse --short HEAD)\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Fetch fund returns from TEFAS
-        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.today.outputs.action == 'fetch'
         run: python3 scripts/fetch_funds.py site/data/funds.json
 
       - name: Commit updated data
-        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.today.outputs.action == 'fetch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -66,6 +121,7 @@ jobs:
 
       # Data runs don't run the tests, so that a test failure never holds
       # back the data, but they mustn't deploy code whose tests failed either.
+      # (A fallback recovery is a data run without the fetch and commit.)
       # scripts/deploy_source.py finds the last commit whose push run of the
       # tests passed. If only site/data/ changed since, this deploys the tip as
       # usual; otherwise it deploys site/ from that commit with today's
@@ -74,7 +130,7 @@ jobs:
       # deployed as before (see the next step): the data must still go out.
       - name: Choose the code to deploy
         id: source
-        if: github.event_name != 'push' && steps.today.outputs.skip != 'true'
+        if: github.event_name != 'push' && steps.today.outputs.action != 'skip'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -131,7 +187,7 @@ jobs:
           echo "⚠️ $msg" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-pages-artifact@v5
-        if: steps.today.outputs.skip != 'true'
+        if: steps.today.outputs.action != 'skip'
         with:
           path: ${{ steps.source.outputs.path || 'site' }}
 
