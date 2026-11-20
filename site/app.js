@@ -7,6 +7,7 @@ import { RULES } from "./filter.js";
 import { isStale } from "./freshness.js";
 import { cappedText, ROW_LIMIT, showAllText, visibleRows } from "./rowlimit.js";
 import { ruleCounts, ruleCountsNote, ruleCountText } from "./rulecounts.js";
+import { formatSize } from "./size.js";
 import { HEIGHT, polylinePoints, recentCount, recentPrices, sparkline, sparklineLabel, WIDTH } from "./sparkline.js";
 import { canSortBy, DEFAULT_STATE, parseState, serializeState } from "./urlstate.js";
 
@@ -251,6 +252,8 @@ function renderBody() {
         }
       } else if (col.type === "return") {
         td.textContent = formatReturn(value);
+      } else if (col.type === "size") {
+        td.textContent = formatSize(value);
       } else if (col.type === "ratio") {
         if (col.key === "sharpe" && fund.sharpeShort) td.append(shortPeriodBadge(fund.sharpeShort), " ");
         td.append(formatRatio(value));

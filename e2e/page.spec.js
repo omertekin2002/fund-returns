@@ -7,7 +7,8 @@ import { coverageText, priceWindowText } from "../site/coverage.js";
 import { istanbulDate } from "../site/freshness.js";
 import { ROW_LIMIT } from "../site/rowlimit.js";
 import { ruleCountsNote, ruleCountText } from "../site/rulecounts.js";
-import { withOnePassingFund, withoutPassingFunds, withPassingFunds } from "../tests/fund-fixtures.mjs";
+import { formatSize } from "../site/size.js";
+import { withOnePassingFund, withoutPassingFunds, withoutSizes, withPassingFunds } from "../tests/fund-fixtures.mjs";
 import {
   committedData,
   committedPrevious,
@@ -351,6 +352,121 @@ test.describe("the first 100 rows in the Excluded and All views", () => {
     expect(box.x + box.width).toBeLessThanOrEqual(320);
     expect(box.height).toBeGreaterThanOrEqual(44);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+});
+
+test.describe("the Size column", () => {
+  const sizeCells = (page) => page.locator("#funds tbody td.col-size");
+  const codeCells = (page) => page.locator("#funds tbody td.col-code a");
+  const byCode = new Map(funds.map((f) => [f.code, f]));
+  const params = (page) => Object.fromEntries(new URL(page.url()).searchParams);
+  const collectErrors = (page) => {
+    const errors = [];
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+    page.on("pageerror", (error) => errors.push(error.message));
+    return errors;
+  };
+  const hasSize = (f) => typeof f.size === "number" && f.size > 0;
+  // The order the page sorts by size in: missing sizes last either way, ties
+  // by code.
+  const sortedCodes = (dir) => {
+    const list = [...funds].sort((a, b) => {
+      const missing = !hasSize(a) || !hasSize(b);
+      const result = missing
+        ? hasSize(a) === hasSize(b)
+          ? 0
+          : hasSize(a)
+            ? -1
+            : 1
+        : dir === "asc"
+          ? a.size - b.size
+          : b.size - a.size;
+      return result || a.code.localeCompare(b.code);
+    });
+    return list.map((f) => f.code);
+  };
+
+  test("follows Risk in every view and shows each fund's size in compact TL", async ({ page }) => {
+    const errors = collectErrors(page);
+    // The served data has funds with and without a size, in every unit.
+    const texts = funds.map((f) => formatSize(f.size));
+    for (const unit of [/ bn TL$/, / mn TL$/, / K TL$/, /^—$/]) expect(texts.some((t) => unit.test(t))).toBe(true);
+
+    await open(page);
+    for (const [view, list] of [
+      ["passing", passing],
+      ["excluded", excluded],
+      ["all", funds],
+    ]) {
+      await page.locator(`[data-view="${view}"]`).click();
+      const labels = await page.locator("#header-row th").allTextContents();
+      expect(labels.indexOf("Size"), view).toBe(labels.indexOf("Risk") + 1);
+      await showEveryRow(page, list.length);
+      const codes = await codeCells(page).allTextContents();
+      expect(await sizeCells(page).allTextContents()).toEqual(codes.map((code) => formatSize(byCode.get(code).size)));
+    }
+    await expect(header(page, "size").getByRole("button")).toHaveAttribute(
+      "title",
+      "The fund's total value in TL on its latest price date",
+    );
+    // Right-aligned on one line, like the other numeric columns.
+    const style = await sizeCells(page)
+      .first()
+      .evaluate((td) => ({ align: getComputedStyle(td).textAlign, wrap: getComputedStyle(td).whiteSpace }));
+    expect(style).toEqual({ align: "right", wrap: "nowrap" });
+    expect(errors).toEqual([]);
+  });
+
+  test("sorts largest first, then smallest first, with missing sizes last both ways", async ({ page }) => {
+    await open(page, "?view=all");
+    await showEveryRow(page, funds.length);
+    await header(page, "size").getByRole("button").click();
+    await expect(header(page, "size")).toHaveAttribute("aria-sort", "descending");
+    await expect(codeCells(page)).toHaveText(sortedCodes("desc"));
+    await expect.poll(() => params(page)).toEqual({ view: "all", sort: "size" });
+
+    await header(page, "size").getByRole("button").click();
+    await expect(header(page, "size")).toHaveAttribute("aria-sort", "ascending");
+    await expect(codeCells(page)).toHaveText(sortedCodes("asc"));
+    await expect.poll(() => params(page)).toEqual({ view: "all", sort: "size", dir: "asc" });
+    const texts = await sizeCells(page).allTextContents();
+    const missing = funds.filter((f) => !hasSize(f)).length;
+    expect(missing).toBeGreaterThan(0);
+    expect(texts.slice(-missing).every((t) => t === "—")).toBe(true);
+    expect(texts.slice(0, -missing).includes("—")).toBe(false);
+  });
+
+  test("?sort=size&dir=asc restores the sort", async ({ page }) => {
+    await open(page, "?view=all&sort=size&dir=asc");
+    await expect(header(page, "size")).toHaveAttribute("aria-sort", "ascending");
+    await expect(header(page, "1m")).toHaveAttribute("aria-sort", "none");
+    // The first 100 rows on screen are the smallest funds.
+    await expect(codeCells(page)).toHaveText(sortedCodes("asc").slice(0, ROW_LIMIT));
+  });
+
+  test.describe("with data from before the Size column", () => {
+    test.use({ fundsData: withoutSizes(data) });
+
+    test("shows — for every fund, sorts without errors and leaves the CSV cells empty", async ({ page }) => {
+      const errors = collectErrors(page);
+      await open(page, "?view=all&sort=size&dir=desc");
+      await expect(header(page, "size")).toHaveAttribute("aria-sort", "descending");
+      await expect(sizeCells(page)).toHaveCount(ROW_LIMIT);
+      expect(new Set(await sizeCells(page).allTextContents())).toEqual(new Set(["—"]));
+      // Every size is missing, so the rows fall back to code order.
+      const codes = funds.map((f) => f.code).sort((a, b) => a.localeCompare(b));
+      await expect(codeCells(page)).toHaveText(codes.slice(0, ROW_LIMIT));
+
+      const [file] = await Promise.all([page.waitForEvent("download"), page.locator("#download-csv").click()]);
+      const lines = (await readFile(await file.path(), "utf8")).slice(1).split("\r\n").slice(0, -1);
+      expect(lines[0].split(",")[4]).toBe("Size (TL)");
+      expect(lines).toHaveLength(funds.length + 1);
+      // Fund names hold no comma or quote, so splitting on commas finds the cell.
+      expect(lines.slice(1).every((line) => line.split(",")[4] === "")).toBe(true);
+      expect(errors).toEqual([]);
+    });
   });
 });
 
@@ -1594,7 +1710,7 @@ test.describe("CSV download", () => {
   const codeCells = (page) => page.locator("#funds tbody td.col-code a");
   const byCode = new Map(funds.map((f) => [f.code, f]));
   const day = istanbulDate(new Date(data.fetchedAt));
-  const PASSING_HEADER = ["Code", "Fund", "Type", "Risk", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe"];
+  const PASSING_HEADER = ["Code", "Fund", "Type", "Risk", "Size (TL)", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe"];
   const HORIZON_KEYS = ["1m", "3m", "6m", "1y", "ytd", "3y", "5y"];
   const TYPE = "Hisse Senedi Şemsiye Fonu";
 
@@ -1648,6 +1764,7 @@ test.describe("CSV download", () => {
     fund.name,
     fund.umbrella,
     raw(fund.risk),
+    raw(fund.size),
     ...HORIZON_KEYS.map((key) => raw(fund.returns[key])),
     raw(fund.sharpe),
     ...(withReason ? [fund.reason?.detail ?? ""] : []),

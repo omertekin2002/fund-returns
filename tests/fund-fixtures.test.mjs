@@ -8,7 +8,15 @@ import { changesSummary, classifyFunds, membershipChanges } from "../site/change
 import { coverageCounts, dataCoverage } from "../site/coverage.js";
 import { csvColumns, toCsv } from "../site/csv.js";
 import { RISK_FREE_UMBRELLA, riskFreeReturns } from "../site/sharpe.js";
-import { FORCED_PASSING, withOnePassingFund, withoutPassingFunds, withPassingFunds } from "./fund-fixtures.mjs";
+import { formatSize } from "../site/size.js";
+import {
+  FORCED_PASSING,
+  withOnePassingFund,
+  withoutPassingFunds,
+  withoutSizes,
+  withPassingFunds,
+  withSizes,
+} from "./fund-fixtures.mjs";
 
 const read = (name) => JSON.parse(readFileSync(new URL(`../site/data/${name}`, import.meta.url), "utf8"));
 const committed = read("funds.json");
@@ -95,3 +103,22 @@ for (const [name, data, count] of [
     assert.match(lines[0], /^﻿Code,Fund,/);
   });
 }
+
+test("withSizes gives most funds a size in every unit and leaves some without, changing nothing else", () => {
+  const sized = withSizes(committed);
+  assert.equal(sized.funds.length, committed.funds.length);
+  const shown = sized.funds.map((f) => formatSize(f.size));
+  for (const unit of [/ bn TL$/, / mn TL$/, / K TL$/, /^—$/]) {
+    assert.ok(shown.some((text) => unit.test(text)), String(unit));
+  }
+  assert.ok(sized.funds.every((f) => f.size === null || (Number.isFinite(f.size) && f.size > 0)));
+  const strip = ({ size, ...f }) => f;
+  assert.deepEqual(sized.funds.map(strip), committed.funds.map(strip));
+  // Sizes don't change which funds pass.
+  assert.deepEqual(passingCodes(classifyFunds(sized.funds)), passingCodes(classifyFunds(committed.funds)));
+});
+
+test("withoutSizes removes every size field", () => {
+  const stripped = withoutSizes(withSizes(committed));
+  assert.ok(stripped.funds.every((f) => !("size" in f)));
+});

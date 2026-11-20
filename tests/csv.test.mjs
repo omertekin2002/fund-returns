@@ -8,6 +8,7 @@ const fund = (overrides = {}) => ({
   name: "ATA PORTFÖY PARA PİYASASI (TL) FONU",
   umbrella: "Para Piyasası Şemsiye Fonu",
   risk: 1,
+  size: 1163456789.12,
   returns: { "1m": 3.0078, "3m": 8.3436, "6m": 17.4597, "1y": 41.859, ytd: 32.2183, "3y": 247.3831, "5y": 412.4501 },
   sharpe: 1.2345678901234567,
   trend: { points: ["0,0 1,1"], label: "Price over 4 weeks: up 1.00%" },
@@ -23,11 +24,11 @@ const rows = (csv) =>
     .slice(0, -1)
     .map((line) => line.split(","));
 
-const PASSING_HEADER = ["Code", "Fund", "Type", "Risk", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe"];
+const PASSING_HEADER = ["Code", "Fund", "Type", "Risk", "Size (TL)", "1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe"];
 
 test("the Passing view has the table's columns without the 4-week line and the Reason", () => {
   assert.deepEqual(
-    csvColumns("passing").map((c) => c.label),
+    csvColumns("passing").map((c) => c.csvLabel ?? c.label),
     PASSING_HEADER,
   );
 });
@@ -35,7 +36,7 @@ test("the Passing view has the table's columns without the 4-week line and the R
 test("the Excluded and All views add the Reason column", () => {
   for (const view of ["excluded", "all"]) {
     assert.deepEqual(
-      csvColumns(view).map((c) => c.label),
+      csvColumns(view).map((c) => c.csvLabel ?? c.label),
       [...PASSING_HEADER, "Reason"],
       view,
     );
@@ -66,10 +67,11 @@ test("an empty list gives just the header row", () => {
   assert.equal(toCsv([], csvColumns("passing")), `${BOM}${PASSING_HEADER.join(",")}\r\n`);
 });
 
-test("numbers are raw: returns in percent without %, Sharpe at full precision, risk as an integer", () => {
+test("numbers are raw: returns in percent without %, Sharpe at full precision, risk as an integer, size in TL", () => {
   const [, row] = rows(toCsv([fund({ returns: { ...fund().returns, "5y": 1234.5 } })], csvColumns("passing")));
   assert.deepEqual(row.slice(3), [
     "1",
+    "1163456789.12",
     "3.0078",
     "8.3436",
     "17.4597",
@@ -84,36 +86,54 @@ test("numbers are raw: returns in percent without %, Sharpe at full precision, r
 test("missing values are empty cells", () => {
   const missing = fund({
     risk: null,
+    size: null,
     returns: { "1m": 3.5, "3m": null, "6m": undefined, "1y": 50 },
     sharpe: null,
   });
   const [, row] = rows(toCsv([missing], csvColumns("passing")));
-  assert.deepEqual(row.slice(3), ["", "3.5", "", "", "50", "", "", "", ""]);
+  assert.deepEqual(row.slice(3), ["", "", "3.5", "", "", "50", "", "", "", ""]);
+});
+
+test("the size is the raw number in TL without grouping, and empty when missing or invalid", () => {
+  const sizes = [5_040_000_000, 850_000, 245_300_000.5];
+  const [, ...body] = rows(toCsv(sizes.map((size) => fund({ size })), csvColumns("passing")));
+  assert.deepEqual(
+    body.map((r) => r[4]),
+    ["5040000000", "850000", "245300000.5"],
+  );
+  // Data from before the Size column has no size field.
+  const { size, ...withoutSize } = fund();
+  const invalid = [withoutSize, fund({ size: 0 }), fund({ size: -1 }), fund({ size: "123" })];
+  const [, ...empty] = rows(toCsv(invalid, csvColumns("all")));
+  assert.deepEqual(
+    empty.map((r) => r[4]),
+    ["", "", "", ""],
+  );
 });
 
 test("negative numbers stay numbers, without a quote prefix", () => {
   const [, row] = rows(toCsv([fund({ returns: { "1m": -2.5 }, sharpe: -0.75 })], csvColumns("passing")));
-  assert.equal(row[4], "-2.5");
-  assert.equal(row[11], "-0.75");
+  assert.equal(row[5], "-2.5");
+  assert.equal(row[12], "-0.75");
 });
 
 test("very small numbers are written as decimals, not in exponent form", () => {
   const [, small, negative] = rows(toCsv([fund({ sharpe: 1e-7 }), fund({ sharpe: -2.5e-8 })], csvColumns("passing")));
-  assert.equal(small[11], "0.0000001");
-  assert.equal(negative[11], "-0.000000025");
+  assert.equal(small[12], "0.0000001");
+  assert.equal(negative[12], "-0.000000025");
 });
 
 test("non-finite numbers are empty cells", () => {
   const [, row] = rows(toCsv([fund({ sharpe: Number.NaN, risk: Infinity })], csvColumns("passing")));
   assert.equal(row[3], "");
-  assert.equal(row[11], "");
+  assert.equal(row[12], "");
 });
 
 test("the Reason column has the exclusion detail, empty for passing funds", () => {
   const excluded = fund({ code: "XYZ", reason: { rule: "min-1m", detail: "1M 2.10% < 3%" } });
   const [, first, second] = rows(toCsv([excluded, fund()], csvColumns("all")));
-  assert.equal(first[12], "1M 2.10% < 3%");
-  assert.equal(second[12], "");
+  assert.equal(first[13], "1M 2.10% < 3%");
+  assert.equal(second[13], "");
 });
 
 test("fields with commas, quotes or line breaks are quoted, with quotes doubled", () => {
@@ -144,7 +164,7 @@ test("text cells that start like a formula get a leading quote", () => {
   // Code, type and reason cells too; text that only contains those characters is left alone.
   const risky = fund({ code: "=A", umbrella: "@B", reason: { rule: "order", detail: "-C" }, name: "A=B" });
   const [, row] = rows(toCsv([risky], csvColumns("all")));
-  assert.deepEqual([row[0], row[1], row[2], row[12]], ["'=A", "A=B", "'@B", "'-C"]);
+  assert.deepEqual([row[0], row[1], row[2], row[13]], ["'=A", "A=B", "'@B", "'-C"]);
 });
 
 test("keeps Turkish characters", () => {

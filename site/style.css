@@ -409,6 +409,7 @@ th button[data-dir="desc"]::after {
 
 .col-return,
 .col-number,
+.col-size,
 .col-ratio {
   text-align: right;
   white-space: nowrap;

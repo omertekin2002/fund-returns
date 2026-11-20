@@ -64,6 +64,26 @@ export function withPassingFunds(data, count = FORCED_PASSING) {
   return { data: result, codes };
 }
 
+// The data with a size (total value in TL, the "size" field fetch_funds.py
+// writes) on every fund but every ninth, which has none. The sizes run from
+// thousands to billions of TL, so the Size column shows every unit. Applied
+// over any sizes the data already has, so the specs don't depend on the day's
+// file, which may predate the Size column.
+export function withSizes(data) {
+  return {
+    ...data,
+    funds: data.funds.map((f, i) => ({
+      ...f,
+      size: i % 9 === 0 ? null : Math.round(10 ** (2 + (i % 9)) * (1 + ((i * 37) % 100) / 100) * 100) / 100,
+    })),
+  };
+}
+
+// The data as it was before the Size column: no fund has a "size" field.
+export function withoutSizes(data) {
+  return { ...data, funds: data.funds.map(({ size, ...f }) => f) };
+}
+
 // The data on a day when no fund passes: every fund's 1M return is 0, below
 // rule 1's minimum.
 export function withoutPassingFunds(data) {
