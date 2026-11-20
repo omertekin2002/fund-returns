@@ -193,7 +193,12 @@ the change from the first to the last price, e.g. "Price over 4 weeks: up
 
 On a narrow screen, such as a phone, the table scrolls sideways to reach this
 and the other columns. The **Code** column stays at the table's left edge while
-it does, so every row still says which fund it is.
+it does, so every row still says which fund it is. On screens 480 px wide or
+less, the columns the rules use come first: Code, then **Reason** (in the
+Excluded and All views), 1M, 3M, 6M, 1Y and Sharpe, then the rest in their
+usual order, so the first screen shows them without scrolling. A phone held
+sideways (wider than 480 px) shows the usual order. The CSV keeps the usual
+order at every width.
 
 ## Download
 
@@ -350,7 +355,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
 ratio, price line, fund size, data freshness, coverage, URL state, changes,
-CSV, empty table message, rule card count, row limit and data fixture tests
+CSV, column order, empty table message, rule card count, row limit and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing (including each fund's size
@@ -421,7 +426,11 @@ kept in and restored from the URL, and are dropped from the URL when
 `LEFT` badges, stays at the table's left edge over the other cells when the
 table is scrolled fully sideways at 320 and 393 px in every view, leaves the
 column widths at 1280 px as they were, and that a header reached with Tab or
-Shift+Tab at 320 px is scrolled clear of it; and that Download
+Shift+Tab at 320 px is scrolled clear of it; that at 320 and 390 px the
+header and rows lead with the code and the rule numbers, which show on the
+first screen, while 1280 px keeps the usual order, that sorting works in
+both orders, and that crossing 480 px re-renders the table in the other order
+keeping the view, filters, search, sort, URL and Show all; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort, including the rows a capped view doesn't show yet (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
@@ -432,7 +441,8 @@ rules that keep all content inside landmarks under one `<main>`, and expects
 no violations in the Passing, Excluded and All views at 1280 px (with the
 changes summary and badges, and in the Excluded and All views both with the
 Show all button and with every row), the Passing view and the All view with
-the Show all button at 320 px, a search that
+the Show all button at 320 px, the Passing and Excluded views at 390 px
+(in the phone column order), a search that
 matches nothing, filters and a search that leave no fund (with the button that
 clears them), stale data and a failed data request; and it tabs through
 every control on the page, with rows, with the Show all button and with the

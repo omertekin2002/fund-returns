@@ -97,6 +97,17 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
     await expectNoViolations(page);
   });
 
+  // Phones lead with the code and the rule numbers (and the Reason in the
+  // Excluded view), see columns.js.
+  for (const view of ["passing", "excluded"]) {
+    test(`in the ${view} view at 390 px, in the phone column order`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await openWithChanges(page, view === "passing" ? "" : `?view=${view}`);
+      await expect(page.locator("#header-row th").nth(1)).toHaveText(view === "passing" ? "1M" : "Reason");
+      await expectNoViolations(page);
+    });
+  }
+
   test("when a search matches no fund", async ({ page }) => {
     await open(page);
     await page.locator("#search").fill("no fund is called this");
