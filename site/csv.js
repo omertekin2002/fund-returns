@@ -38,14 +38,15 @@ function quote(field) {
 }
 
 // The CSV text for funds (in table order) and columns (from columns.js): a
-// BOM, a header row of column labels, then one row per fund. Returns, risk and
-// Sharpe are the raw numbers (returns in percent, without "%").
+// BOM, a header row of column labels (a column's csvLabel where it has one),
+// then one row per fund. Returns, risk, size and Sharpe are the raw numbers
+// (returns in percent, without "%"; size in TL).
 export function toCsv(funds, columns) {
   const row = (cells) => `${cells.map(quote).join(",")}\r\n`;
   const lines = funds.map((fund) =>
     row(columns.map((col) => (col.type === "text" ? textCell(col.value(fund)) : numberCell(col.value(fund))))),
   );
-  return BOM + row(columns.map((col) => col.label)) + lines.join("");
+  return BOM + row(columns.map((col) => col.csvLabel ?? col.label)) + lines.join("");
 }
 
 // "tefas-funds-<view>-<YYYY-MM-DD>.csv", dated with the Istanbul day the data

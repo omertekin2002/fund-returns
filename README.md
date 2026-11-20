@@ -142,6 +142,20 @@ have no risk level." A count of 0 is left out. The counts cover every fund in
 the data, whatever the view, filters or search. Both lines are worked out by
 [`site/coverage.js`](site/coverage.js).
 
+## Fund size
+
+The **Size** column, after **Risk**, is each fund's total value in TL
+(TEFAS's `portfoyBuyukluk`, "portföy büyüklüğü"), so a 5-million-TL niche
+fund can be told from a 5-billion-TL one. It comes from the same TEFAS ›
+Fon Verileri rows as the daily prices, and is the fund's value on its most
+recent price date in the six-month window that has one (normally the latest
+price date). It is shown in compact TL: `1.16 bn TL` (billions, two
+decimals), `245.3 mn TL` (millions, one decimal), `850 K TL` (thousands) or
+whole TL below that, by [`site/size.js`](site/size.js). Funds without a size,
+and data fetched before this column was added, show `—`. Sorting by it puts
+the largest funds first, and missing sizes always sort last. The size is not
+part of any rule.
+
 ## Sharpe ratio
 
 The **Sharpe** column is each fund's Sharpe ratio over the last six months of
@@ -196,8 +210,9 @@ so the Passing view's file has no Reason column. The file is written by
   4180: fields with a comma, quote or line break are quoted). It starts with a
   UTF-8 byte order mark, so Excel shows Turkish letters correctly.
 - Returns are the raw percentages from the data (e.g. `3.0078`, without `%`),
-  Sharpe ratios are at full precision and risk is a whole number. Missing
-  values are empty cells.
+  Sharpe ratios are at full precision and risk is a whole number. The
+  **Size (TL)** column is the fund's size in TL as a plain number (e.g.
+  `1190580813.75`, no grouping). Missing values are empty cells.
 - Text that starts with `=`, `+`, `-`, `@`, a tab or a carriage return gets a
   leading `'`, so spreadsheet apps don't run it as a formula.
 
@@ -211,7 +226,9 @@ The button is disabled until the data has loaded, and while no fund matches.
   API behind [TEFAS › Fon Verileri](https://www.tefas.gov.tr/tr/fon-verileri)
   for each fund's daily prices over the last six months (TEFAS allows at most
   one month per request, so it asks for four weeks at a time, 15 seconds
-  apart). It writes both to
+  apart), keeping each fund's size from the same rows (see
+  [Fund size](#fund-size); a missing or invalid size never fails the
+  update). It writes both to
   [`site/data/funds.json`](site/data/funds.json), after keeping an earlier
   day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
@@ -224,8 +241,16 @@ The button is disabled until the data has loaded, and while no fund matches.
   deploys `site/` to GitHub Pages. cron-job.org starts it at 10:15 Istanbul
   time on weekdays (see [Daily trigger](#daily-trigger-cron-joborg)). Its own
   GitHub schedule (12:37 Istanbul time, Monday to Friday) is a fallback: it
-  does nothing if that day's data is already in, and otherwise fetches it,
-  usually a few hours late. If cron-job.org didn't start a run that day, the
+  fetches that day's data if it isn't in the repository yet, usually a few
+  hours late, and does nothing if it is in and the live site serves it. If
+  that day's data is committed but the site still serves an older
+  `data/funds.json` (or the fallback can't read the live file), the deploy
+  after the commit most likely failed: the fallback then republishes the
+  committed data, without fetching or committing, through the same choice of
+  tested code as any data run, and says so in the run's summary and a
+  warning.
+  [`scripts/fallback_action.py`](scripts/fallback_action.py) makes that
+  decision. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
   owner (see [Daily trigger](#daily-trigger-cron-joborg)). Pushes to `main`
   redeploy the site without fetching, after its `tests` job (the two jobs from
@@ -324,11 +349,12 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
-ratio, price line, data freshness, coverage, URL state, changes, CSV, empty
-table message, rule card count, row limit and data fixture tests
+ratio, price line, fund size, data freshness, coverage, URL state, changes,
+CSV, empty table message, rule card count, row limit and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
-fails. The fetch script tests cover its parsing, validation, output format,
+fails. The fetch script tests cover its parsing (including each fund's size
+from its latest valid value), validation, output format,
 retries, atomic write and keeping of `previous.json` with fixtures and mocks,
 the trigger check tests
 cover its decision with fixture `gh run list` output, and the deploy source
@@ -340,8 +366,8 @@ and a throwaway git repository, so they need no network and no packages
 `npx playwright install chromium` once, then `npm run test:e2e`. They serve
 `site/` on `http://127.0.0.1:8137` and open it in headless Chromium with
 [Playwright](https://playwright.dev), using the committed
-`site/data/funds.json` with four more funds made to pass (see
-[`e2e/fixtures.js`](e2e/fixtures.js)).
+`site/data/funds.json` with four more funds made to pass and known fund sizes
+(see [`e2e/fixtures.js`](e2e/fixtures.js)).
 
 Neither suite depends on how many funds pass on the committed day, which
 swings with the market and can be none. Checks that need passing funds use
@@ -368,7 +394,10 @@ URL and fits a 320 px screen, while the Passing view and lists of 100 or fewer
 are never capped; that search and column sorting work, and are kept in
 and restored from the URL; that every fund with two prices has a labelled
 4-week price line (and the rest show `—`), and that its column can't be
-sorted; that an empty table says no fund passes all six rules when none does
+sorted; that the Size column follows Risk in every view, shows each fund's
+size in compact TL, sorts both ways with missing sizes last, is restored from
+`?sort=size&dir=asc`, and shows `—` without errors for data that has no
+sizes; that an empty table says no fund passes all six rules when none does
 (without a button), or names exactly the filters and search that leave no
 fund, shown as text and fitting a 320 px screen, with a button that clears
 them from the mouse or keyboard, keeping the view and sort, and clears them
