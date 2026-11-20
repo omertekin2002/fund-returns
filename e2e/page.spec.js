@@ -1181,6 +1181,87 @@ test.describe("the column order on phones", () => {
   });
 });
 
+test.describe("the table on laptop and desktop screens", () => {
+  const PASSING_LABELS = [
+    ...["Code", "Fund", "Type", "Risk", "Size"],
+    ...["1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe", "4 weeks"],
+  ];
+  const views = [
+    ["passing", passing.length, PASSING_LABELS],
+    ["excluded", excluded.length, [...PASSING_LABELS, "Reason"]],
+    ["all", funds.length, [...PASSING_LABELS, "Reason"]],
+  ];
+
+  // The table's full width against the wrapper it scrolls in, each header
+  // label's lines and whether it is cut off, and the fund names, types and
+  // reasons that are cut off (wider than their cell) rather than wrapped.
+  const geometry = (page) =>
+    page.evaluate(() => {
+      const wrapper = document.querySelector(".table-wrap");
+      const headers = [...document.querySelectorAll("#header-row th")].map((th) => {
+        const label = th.querySelector("button, span");
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+        return { text: th.textContent, lines, clipped: label.scrollWidth > label.clientWidth };
+      });
+      const cut = [...document.querySelectorAll("#funds tbody td:is(.col-name, .col-umbrella, .col-reason)")]
+        .filter((td) => td.scrollWidth > td.clientWidth)
+        .map((td) => td.textContent);
+      return {
+        table: document.querySelector("#funds").scrollWidth,
+        wrapper: wrapper.clientWidth,
+        headers,
+        cut,
+      };
+    });
+
+  async function expectFits(page, label) {
+    const g = await geometry(page);
+    expect(g.table, `${label}: table width against the wrapper`).toBeLessThanOrEqual(g.wrapper);
+    for (const h of g.headers) {
+      expect(h.lines, `${label}: ${h.text} header on one line`).toBe(1);
+      expect(h.clipped, `${label}: ${h.text} header not cut off`).toBe(false);
+    }
+    expect(g.cut, `${label}: names, types and reasons wrap`).toEqual([]);
+  }
+
+  for (const width of [1280, 1366, 1440, 1920]) {
+    test(`fits its wrapper with every column at ${width} px in every view, also after Show all`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 });
+      for (const [view, count, labels] of views) {
+        await open(page, `?view=${view}`);
+        await expect(page.locator("#header-row th")).toHaveText(labels);
+        await expectFits(page, view);
+        if (count > ROW_LIMIT) {
+          await showEveryRow(page, count);
+          await expectFits(page, `${view} after Show all`);
+        }
+      }
+    });
+  }
+
+  test("fits its wrapper at 1024 px in the Passing view", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await open(page);
+    await expect(page.locator("#header-row th")).toHaveText(PASSING_LABELS);
+    await expectFits(page, "passing");
+  });
+
+  test("still scrolls sideways inside its wrapper where it doesn't fit", async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 800 });
+    await open(page, "?view=all");
+    const g = await page.locator(".table-wrap").evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+      return { scrollLeft: el.scrollLeft, page: document.documentElement.scrollWidth };
+    });
+    expect(g.scrollLeft).toBeGreaterThan(0);
+    expect(g.page).toBeLessThanOrEqual(800);
+  });
+});
+
 test.describe("price dates and coverage", () => {
   const priceDates = (page) => page.locator("#price-dates");
   const sentence = (page) => page.locator("#coverage");

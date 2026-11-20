@@ -203,7 +203,10 @@ highest price, so heights can't be compared between rows. Screen readers read
 the change from the first to the last price, e.g. "Price over 4 weeks: up
 2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
 
-On a narrow screen, such as a phone, the table scrolls sideways to reach this
+On a laptop or desktop screen the whole table fits the page without scrolling
+sideways (from 1,280 px wide in every view, and from 1,024 px in the Passing
+view): fund names, types and reasons wrap onto more lines instead. On a
+narrower screen, such as a phone, the table scrolls sideways to reach this
 and the other columns. The **Code** column stays at the table's left edge while
 it does, so every row still says which fund it is. On screens 480 px wide or
 less, the columns the rules use come first: Code, then **Reason** (in the
@@ -442,7 +445,11 @@ Shift+Tab at 320 px is scrolled clear of it; that at 320 and 390 px the
 header and rows lead with the code and the rule numbers, which show on the
 first screen, while 1280 px keeps the usual order, that sorting works in
 both orders, and that crossing 480 px re-renders the table in the other order
-keeping the view, filters, search, sort, URL and Show all; and that Download
+keeping the view, filters, search, sort, URL and Show all; that at 1280,
+1366, 1440 and 1920 px the table fits inside its wrapper with every column in
+every view, also after Show all (and at 1024 px in the Passing view), with
+each header on one line and no fund name, type or reason cut off, and that
+it still scrolls sideways inside its wrapper where it doesn't fit; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort, including the rows a capped view doesn't show yet (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
