@@ -253,7 +253,12 @@ The button is disabled until the data has loaded, and while no fund matches.
   day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
   only the Python standard library and refuses to overwrite the file if a
-  response looks wrong.
+  response looks wrong: a TEFAS error, a missing or incomplete row, fewer
+  than 200 funds, a fund list under 90% as long as the existing file's, more
+  than 40% of funds without a 1M, 3M, 6M or 1Y return (missing or exactly 0,
+  which would mean TEFAS sent an empty column), or prices for too few dates
+  or funds or a price list that may be cut off. The limits are constants at
+  the top of the script.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier

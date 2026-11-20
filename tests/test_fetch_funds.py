@@ -166,6 +166,70 @@ class ParseTest(unittest.TestCase):
             fetch_funds.parse(raw)
 
 
+def with_returns(codes, field, values):
+    """A fund list response whose funds have field set to values, in order."""
+    raw = funds_response(codes)
+    for row, value in zip(raw["resultList"], values):
+        row[field] = value
+    return raw
+
+
+@small_limits
+class CheckReturnsTest(unittest.TestCase):
+    """parse() refuses a list where many funds lack a return the rules use."""
+
+    RULE_FIELDS = {"getiri1a": "1M", "getiri3a": "3M", "getiri6a": "6M", "getiri1y": "1Y"}
+    FIVE = ["AAA", "BBB", "CCC", "DDD", "EEE"]
+
+    def test_checks_the_returns_the_rules_use(self):
+        self.assertEqual(fetch_funds.RULE_RETURNS, ["1m", "3m", "6m", "1y"])
+        self.assertEqual(
+            [fetch_funds.RETURN_FIELDS[field] for field in self.RULE_FIELDS],
+            fetch_funds.RULE_RETURNS,
+        )
+
+    def test_rejects_an_empty_rule_column(self):
+        for field, label in self.RULE_FIELDS.items():
+            for empty in [None, "", 0, "0", 0.0]:
+                with self.subTest(field=field, empty=empty):
+                    raw = with_returns(CODES, field, [empty] * len(CODES))
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        f"^{label} return missing or 0 for 3 of 3 funds "
+                        r"\(more than 40%\); TEFAS may have sent an empty column$",
+                    ):
+                        fetch_funds.parse(raw)
+
+    def test_the_limit_is_more_than_40_percent(self):
+        for field, label in self.RULE_FIELDS.items():
+            with self.subTest(field=field):
+                # 2 of 5 is 40%: accepted.
+                raw = with_returns(self.FIVE, field, [None, 0, 1.5, 2.5, -3])
+                funds = fetch_funds.parse(raw)
+                self.assertEqual(len(funds), 5)
+                # 3 of 5 is 60%, counting missing and 0 together: refused.
+                raw = with_returns(self.FIVE, field, [None, 0, "", 2.5, -3])
+                with self.assertRaisesRegex(ValueError, f"^{label} return missing or 0 for 3 of 5"):
+                    fetch_funds.parse(raw)
+
+    def test_a_negative_return_is_not_missing(self):
+        raw = with_returns(CODES, "getiri1a", [-0.5, -12, "-3.25"])
+        self.assertEqual(len(fetch_funds.parse(raw)), 3)
+
+    def test_ytd_3y_and_5y_may_be_missing_for_every_fund(self):
+        raw = funds_response()
+        for row in raw["resultList"]:
+            row.update(getiriyb=None, getiri3y="", getiri5y=0)
+        funds = fetch_funds.parse(raw)
+        self.assertEqual([fund["returns"]["5y"] for fund in funds], [0, 0, 0])
+
+    def test_skipped_funds_dont_count(self):
+        rows = [fund_row(code) for code in CODES] + [
+            fund_row(code, tefasDurum=False, getiri6a=None) for code in ["DDD", "EEE", "FFF"]
+        ]
+        self.assertEqual(codes_of(fetch_funds.parse({"resultList": rows})), CODES)
+
+
 @small_limits
 class ParsePricesTest(unittest.TestCase):
     def test_returns_sorted_dates_with_one_price_per_date_for_every_fund(self):
@@ -440,6 +504,15 @@ class RealLimitsTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "funds returned"):
             fetch_funds.parse(funds_response(self.codes[1:]))
+
+    def test_parse_with_missing_returns(self):
+        # A list the size of a real one: 430 of 1,076 is under 40%, 431 over.
+        codes = [f"F{n:04d}" for n in range(1076)]
+        fetch_funds.parse(with_returns(codes, "getiri6a", [None] * 430))
+        with self.assertRaisesRegex(
+            ValueError, "^6M return missing or 0 for 431 of 1,076 funds"
+        ):
+            fetch_funds.parse(with_returns(codes, "getiri6a", [None] * 431))
 
     def test_parse_prices(self):
         parse_prices(prices_response(self.codes, self.dates), self.codes)
@@ -721,6 +794,74 @@ class RotatePreviousTest(unittest.TestCase):
         self.assertEqual(self.files(), ["funds.json"])
 
 
+def funds_of(count):
+    return [{"code": f"F{n:04d}"} for n in range(count)]
+
+
+class CheckFundCountTest(unittest.TestCase):
+    """check_fund_count() compares the new list with the existing file's."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name) / "funds.json"
+
+    def write_old(self, count, fetched_at="2026-11-20T07:15:31Z"):
+        codes = [f"F{n:04d}" for n in range(count)]
+        self.output.write_text(data_file(fetched_at, codes), encoding="utf-8")
+
+    def check(self, count):
+        fetch_funds.check_fund_count(funds_of(count), str(self.output))
+
+    def test_accepts_90_percent_or_more_of_the_last_list(self):
+        self.write_old(10)
+        for count in [9, 10, 11, 2000]:
+            with self.subTest(count=count):
+                self.check(count)
+
+    def test_rejects_fewer_than_90_percent(self):
+        self.write_old(1076)
+        self.check(969)  # 90.06%
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^Only 968 funds returned, down from 1,076 in the data fetched at "
+            r"2026-11-20T07:15:31Z \(expected at least 90%\)$",
+        ):
+            self.check(968)
+        with self.assertRaisesRegex(ValueError, "^Only 600 funds returned, down from 1,076"):
+            self.check(600)
+
+    def test_names_the_existing_data_when_it_has_no_fetched_at(self):
+        self.output.write_text(json.dumps({"funds": funds_of(10)}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "down from 10 in the existing data "):
+            self.check(8)
+
+    def test_skips_the_check_without_a_usable_old_list(self):
+        self.check(1)  # no file
+        for text in [
+            "not json",
+            "",
+            "[]",
+            '"funds"',
+            "5",
+            "null",
+            '{"fetchedAt": "2026-11-20T07:15:31Z"}',
+            '{"funds": null}',
+            '{"funds": {"F0000": {}}}',
+            '{"funds": []}',
+        ]:
+            with self.subTest(text=text):
+                self.output.write_text(text, encoding="utf-8")
+                self.check(1)
+
+    def test_skips_the_check_when_the_old_file_cant_be_read(self):
+        self.write_old(10)
+        with mock.patch("builtins.open", side_effect=PermissionError("denied")):
+            self.check(1)
+        self.output.write_bytes(b"\xff\xfe not utf-8")
+        self.check(1)
+
+
 class FixedDatetime(fetch_funds.datetime):
     @classmethod
     def now(cls, tz=None):
@@ -800,6 +941,7 @@ class MainTest(unittest.TestCase):
             [RuntimeError("Could not fetch data from TEFAS")],
             [funds_response(CODES[:1]), prices_response()],  # too few funds
             [funds_response(), prices_response(dates=DATES[:1])],  # too few dates
+            [with_returns(CODES, "getiri6a", [None, 0, ""]), prices_response()],  # empty 6M
         ]:
             with self.subTest(responses=responses):
                 self.output.write_text(old, encoding="utf-8")
@@ -809,6 +951,31 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(self.output.read_text(encoding="utf-8"), old)
                 self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
                 self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
+
+    def test_a_much_shorter_fund_list_changes_neither_file(self):
+        old = data_file("2026-10-27T07:15:00Z", ["AAA", "BBB", "CCC", "DDD"])
+        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(kept, encoding="utf-8")
+        # 3 of 4 is 75%. Refused before the prices are fetched.
+        with mock.patch.object(fetch_funds, "fetch_json", side_effect=[funds_response()]) as fetch:
+            with self.assertRaisesRegex(
+                ValueError,
+                r"^Only 3 funds returned, down from 4 in the data fetched at "
+                r"2026-10-27T07:15:00Z \(expected at least 90%\)$",
+            ):
+                fetch_funds.main()
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), old)
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
+
+    def test_a_list_at_least_90_percent_as_long_is_written(self):
+        old = data_file("2026-10-27T07:15:00Z", CODES)
+        self.output.write_text(old, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["fetchedAt"], "2026-10-28T07:15:00Z")
 
 
 if __name__ == "__main__":
