@@ -162,10 +162,22 @@ The **Sharpe** column is each fund's Sharpe ratio over the last six months of
 daily prices, worked out in the browser by [`site/sharpe.js`](site/sharpe.js):
 
 - A fund's daily return is its price change from one price date to the next.
-- The risk-free return for each day is the median daily return of the money
-  market funds (Para Piyasası Şemsiye Fonu) in the list. It follows the market
-  rate without being updated by hand, and covers weekends and holidays, when
-  money market funds earn several days of interest at once.
+- The risk-free return for each day is the average daily return of the
+  better-yielding half of the money market funds (Para Piyasası Şemsiye Fonu)
+  in the list. Someone parking cash in a money market fund can pick a good
+  one, so that is the return a riskier fund has to beat. It follows the
+  market rate without being updated by hand, and covers weekends and
+  holidays, when money market funds earn several days of interest at once.
+  - The money market funds are ranked by their geometric mean daily return,
+    `(∏(1 + r))^(1/n) − 1`, over the days each has a return, and the top half
+    is kept (rounded up: 2 of 3, 26 of 52). A fund launched partway through
+    the window ranks on the same footing as the others, and a price that
+    spikes and falls back doesn't rank high.
+  - Only funds with at least 21 daily returns are ranked, or every fund with
+    a return when none has that many. Ties go to the earlier fund code.
+  - Each day's risk-free return is the mean of the kept funds' returns that
+    day, leaving out kept funds without one. A day when none of them has a
+    return has no risk-free return.
 - The ratio is the mean of the daily excess returns (fund minus risk-free)
   divided by their standard deviation, annualised by multiplying by √252.
 - Funds with fewer than 21 daily returns in the window, about one month of
@@ -191,9 +203,17 @@ highest price, so heights can't be compared between rows. Screen readers read
 the change from the first to the last price, e.g. "Price over 4 weeks: up
 2.31%". Funds with fewer than two prices show `—`. The column can't be sorted.
 
-On a narrow screen, such as a phone, the table scrolls sideways to reach this
+On a laptop or desktop screen the whole table fits the page without scrolling
+sideways (from 1,280 px wide in every view, and from 1,024 px in the Passing
+view): fund names, types and reasons wrap onto more lines instead. On a
+narrower screen, such as a phone, the table scrolls sideways to reach this
 and the other columns. The **Code** column stays at the table's left edge while
-it does, so every row still says which fund it is.
+it does, so every row still says which fund it is. On screens 480 px wide or
+less, the columns the rules use come first: Code, then **Reason** (in the
+Excluded and All views), 1M, 3M, 6M, 1Y and Sharpe, then the rest in their
+usual order, so the first screen shows them without scrolling. A phone held
+sideways (wider than 480 px) shows the usual order. The CSV keeps the usual
+order at every width.
 
 ## Download
 
@@ -233,7 +253,12 @@ The button is disabled until the data has loaded, and while no fund matches.
   day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
   only the Python standard library and refuses to overwrite the file if a
-  response looks wrong.
+  response looks wrong: a TEFAS error, a missing or incomplete row, fewer
+  than 200 funds, a fund list under 90% as long as the existing file's, more
+  than 40% of funds without a 1M, 3M, 6M or 1Y return (missing or exactly 0,
+  which would mean TEFAS sent an empty column), or prices for too few dates
+  or funds or a price list that may be cut off. The limits are constants at
+  the top of the script.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier
@@ -350,7 +375,7 @@ npm run test:e2e  # page tests in headless Chromium (needs the setup below)
 `npm test` runs the filter rule and rule evidence (including a check over the
 committed data that every fund's reason is its first failing rule), Sharpe
 ratio, price line, fund size, data freshness, coverage, URL state, changes,
-CSV, empty table message, rule card count, row limit and data fixture tests
+CSV, column order, empty table message, rule card count, row limit and data fixture tests
 (`node --test`), then the Python tests in [`tests/`](tests/)
 (`python3 -m unittest discover -s tests -v`), and fails if either suite
 fails. The fetch script tests cover its parsing (including each fund's size
@@ -421,7 +446,15 @@ kept in and restored from the URL, and are dropped from the URL when
 `LEFT` badges, stays at the table's left edge over the other cells when the
 table is scrolled fully sideways at 320 and 393 px in every view, leaves the
 column widths at 1280 px as they were, and that a header reached with Tab or
-Shift+Tab at 320 px is scrolled clear of it; and that Download
+Shift+Tab at 320 px is scrolled clear of it; that at 320 and 390 px the
+header and rows lead with the code and the rule numbers, which show on the
+first screen, while 1280 px keeps the usual order, that sorting works in
+both orders, and that crossing 480 px re-renders the table in the other order
+keeping the view, filters, search, sort, URL and Show all; that at 1280,
+1366, 1440 and 1920 px the table fits inside its wrapper with every column in
+every view, also after Show all (and at 1024 px in the Passing view), with
+each header on one line and no fund name, type or reason cut off, and that
+it still scrolls sideways inside its wrapper where it doesn't fit; and that Download
 CSV saves exactly the table's rows and columns for the view, filters, search
 and sort, including the rows a capped view doesn't show yet (with the right file name, byte order mark and raw numbers), is
 disabled while no fund matches, and works from the keyboard and at 320 px
@@ -432,7 +465,8 @@ rules that keep all content inside landmarks under one `<main>`, and expects
 no violations in the Passing, Excluded and All views at 1280 px (with the
 changes summary and badges, and in the Excluded and All views both with the
 Show all button and with every row), the Passing view and the All view with
-the Show all button at 320 px, a search that
+the Show all button at 320 px, the Passing and Excluded views at 390 px
+(in the phone column order), a search that
 matches nothing, filters and a search that leave no fund (with the button that
 clears them), stale data and a failed data request; and it tabs through
 every control on the page, with rows, with the Show all button and with the

@@ -353,9 +353,12 @@ table {
   font-size: 12px;
 }
 
+/* 6px side padding, not DESIGN.md's 12px: with 12px on each of the 14–15
+   cells the table was wider than the 1,120px page frame, cutting off 4 weeks
+   and Reason on every desktop screen. */
 th,
 td {
-  padding: var(--space-s) var(--space-md);
+  padding: var(--space-s);
   border-bottom: var(--hairline);
   text-align: left;
   vertical-align: top;
@@ -374,7 +377,7 @@ thead th {
 th button,
 th > span {
   width: 100%;
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-sm) var(--space-s);
   border: 0;
   background: transparent;
   color: var(--ink);
@@ -438,10 +441,6 @@ thead th.col-code {
   z-index: 2;
 }
 
-.col-name {
-  min-width: 240px;
-}
-
 /* NEW / LEFT next to the code of a fund that entered or left the passing
    list: a small flat block in a catalog tint, black text (AA contrast). */
 .badge {
@@ -473,10 +472,6 @@ thead th.col-code {
   vertical-align: 1px;
 }
 
-.col-umbrella {
-  min-width: 140px;
-}
-
 /* The 4-week price line: a black stroke on the white row, no fill (DESIGN.md:
    flat, ink on canvas). The table-wrap scrolls it into view on phones. */
 td.col-sparkline {
@@ -499,9 +494,12 @@ td.col-sparkline {
   stroke-linejoin: round;
 }
 
+/* Above 480px, fund names, types and reasons have no minimum width and wrap
+   (a reason onto lines of about equal length), so the table fits the page
+   frame on a laptop. Phones scroll the table sideways anyway and keep wider
+   columns (see the 480px rules). */
 .col-reason {
-  min-width: 170px;
-  white-space: nowrap;
+  text-wrap: balance;
 }
 
 /* The empty table's message, and the line under a capped table (see
@@ -608,5 +606,33 @@ td.col-sparkline {
 
   .button-secondary {
     flex: 1 1 auto;
+  }
+
+  /* Narrower cells, so the Code and the rule numbers that follow it on
+     phones (PHONE_ORDER in columns.js) fit the first screen. */
+  td {
+    padding-right: var(--space-sm);
+    padding-left: var(--space-sm);
+  }
+
+  th button,
+  th > span {
+    padding-right: var(--space-sm);
+    padding-left: var(--space-sm);
+  }
+
+  /* Wider name and type columns and one-line reasons: the table scrolls
+     sideways here anyway. */
+  .col-name {
+    min-width: 240px;
+  }
+
+  .col-umbrella {
+    min-width: 140px;
+  }
+
+  .col-reason {
+    min-width: 170px;
+    white-space: nowrap;
   }
 }

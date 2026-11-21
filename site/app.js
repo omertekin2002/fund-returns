@@ -1,5 +1,5 @@
 import { changesSummaryParts, classifyFunds, membershipChanges } from "./changes.js";
-import { COLUMNS, columnsFor } from "./columns.js";
+import { COLUMNS, columnsFor, PHONE_QUERY } from "./columns.js";
 import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { emptyMessage, inView } from "./empty.js";
@@ -89,8 +89,13 @@ function formatFetchedAt(iso) {
 // Lower-case with Turkish rules so "İ"/"I" match "i"/"ı" typed in search.
 const normalize = (text) => text.toLocaleLowerCase("tr-TR");
 
+// Phones lead with the rule numbers after the code (see columns.js). The
+// header and the rows are built in that order, so what is seen, tabbed through
+// and read out by a screen reader all agree.
+const phone = matchMedia(PHONE_QUERY);
+
 function visibleColumns() {
-  return columnsFor(state.view);
+  return columnsFor(state.view, { phone: phone.matches });
 }
 
 // The rule cards count every fund, so they don't follow the view, filters or
@@ -123,6 +128,7 @@ function renderHeader() {
       const th = document.createElement("th");
       th.scope = "col";
       th.className = `col-${col.type} col-${col.key}`;
+      th.dataset.key = col.key;
       if (col.sortable === false) {
         // A plain label: no sort button and no aria-sort.
         const label = document.createElement("span");
@@ -433,6 +439,19 @@ async function init() {
   els.clearFilters.addEventListener("click", clearFilters);
   els.showAll.addEventListener("click", showAllRows);
   els.headerRow.addEventListener("focusin", revealFocusedHeader);
+  // Crossing the phone breakpoint (e.g. rotating a phone) rebuilds the table
+  // in the other order, keeping the view, filters, search, sort and Show all,
+  // and focus on a header button that had it. Nothing to rebuild before the
+  // table's first render.
+  phone.addEventListener("change", () => {
+    if (!els.headerRow.hasChildNodes()) return;
+    const focusedKey = els.headerRow.contains(document.activeElement)
+      ? document.activeElement.closest("th").dataset.key
+      : null;
+    renderHeader();
+    renderBody();
+    if (focusedKey) els.headerRow.querySelector(`th[data-key="${focusedKey}"] button`)?.focus();
+  });
   for (const [key, select] of [
     ["type", els.typeFilter],
     ["risk", els.riskFilter],

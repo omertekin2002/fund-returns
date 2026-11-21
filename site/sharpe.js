@@ -2,10 +2,12 @@
 // six months). A fund's "prices" list has one price (or null) per date in the
 // file's "priceDates".
 //
-// The risk-free return for each day is the median return of the money market
-// funds that day. It follows the market rate without being updated by hand,
-// and covers weekends and holidays, when money market funds earn several
-// days of interest at once.
+// The risk-free return for each day is the mean return that day of the
+// better-yielding half of the money market funds: someone parking cash in a
+// money market fund can pick a good one, so that's what a riskier fund has
+// to beat. It follows the market rate without being updated by hand, and
+// covers weekends and holidays, when money market funds earn several days of
+// interest at once.
 
 export const RISK_FREE_UMBRELLA = "Para Piyasası Şemsiye Fonu";
 export const TRADING_DAYS_PER_YEAR = 252;
@@ -24,21 +26,38 @@ export function dailyReturns(prices) {
     .map((price, i) => (isPrice(price) && isPrice(prices[i]) ? price / prices[i] - 1 : null));
 }
 
-function median(values) {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+// The money market funds' geometric mean daily return over the days they
+// have a return, (∏(1 + r))^(1/n) − 1, compared through its logarithm. A fund
+// launched partway through the window ranks on the same footing as the
+// others, and a price that spikes and reverts doesn't rank high.
+const logGrowthPerDay = (returns) => returns.reduce((sum, r) => sum + Math.log1p(r), 0) / returns.length;
+
+// The better-yielding half (⌈n/2⌉) of the money market funds, by geometric
+// mean daily return, ties broken by fund code. Only funds with at least
+// MIN_RETURNS daily returns are ranked, or, when none has that many, every
+// fund with at least one.
+function betterHalf(series) {
+  const priced = series.map((s) => ({ ...s, count: s.returns.filter((r) => !isMissing(r)).length }));
+  const enough = priced.filter((s) => s.count >= MIN_RETURNS);
+  const ranked = (enough.length ? enough : priced.filter((s) => s.count > 0))
+    .map((s) => ({ ...s, growth: logGrowthPerDay(s.returns.filter((r) => !isMissing(r))) }))
+    .sort((a, b) => b.growth - a.growth || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  return ranked.slice(0, Math.ceil(ranked.length / 2));
 }
 
-// Median daily return of the money market funds, one per daily return.
+const average = (values) => (values.length ? values.reduce((sum, r) => sum + r, 0) / values.length : null);
+
+// Risk-free return for each daily return: the mean return that day of the
+// better-yielding half of the money market funds, leaving out those without
+// a return that day (null when none of them has one).
 export function riskFreeReturns(funds) {
   const series = funds
     .filter((fund) => fund.umbrella === RISK_FREE_UMBRELLA)
-    .map((fund) => dailyReturns(fund.prices));
-  const days = Math.max(0, ...series.map((returns) => returns.length));
+    .map((fund) => ({ code: fund.code, returns: dailyReturns(fund.prices) }));
+  const days = Math.max(0, ...series.map(({ returns }) => returns.length));
+  const kept = betterHalf(series);
   return Array.from({ length: days }, (_, day) =>
-    median(series.map((returns) => returns[day]).filter((r) => !isMissing(r))),
+    average(kept.map(({ returns }) => returns[day]).filter((r) => !isMissing(r))),
   );
 }
 

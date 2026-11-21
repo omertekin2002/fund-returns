@@ -986,7 +986,12 @@ test.describe("the pinned Code column", () => {
     const keys = await page
       .locator("#header-row th button")
       .evaluateAll((buttons) => buttons.map((b) => b.textContent));
-    expect(keys.at(-1)).toBe("Reason");
+    // Phones lead with Reason and the rule numbers (see columns.js), so the
+    // last header button is 5Y.
+    expect(keys).toEqual([
+      ...["Code", "Reason", "1M", "3M", "6M", "1Y", "Sharpe"],
+      ...["Fund", "Type", "Risk", "Size", "YTD", "3Y", "5Y"],
+    ]);
 
     // Where the focused header is, against the pinned column and the wrapper.
     const focused = () =>
@@ -1022,9 +1027,9 @@ test.describe("the pinned Code column", () => {
       expect(f.text).toBe(key);
       expectClear(f);
     }
-    // The Reason header fits beside the pinned column, so it shows in full.
-    const reason = await focused();
-    expect(reason.right).toBeLessThanOrEqual(reason.wrapRight + 1);
+    // The last header fits beside the pinned column, so it shows in full.
+    const last = await focused();
+    expect(last.right).toBeLessThanOrEqual(last.wrapRight + 1);
 
     // And back, which scrolls left.
     for (const key of keys.slice(1, -1).reverse()) {
@@ -1033,6 +1038,227 @@ test.describe("the pinned Code column", () => {
       expect(f.text).toBe(key);
       expectClear(f);
     }
+  });
+});
+
+test.describe("the column order on phones", () => {
+  const DESKTOP = [
+    ...["Code", "Fund", "Type", "Risk", "Size"],
+    ...["1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe", "4 weeks"],
+  ];
+  const PHONE = [
+    ...["Code", "1M", "3M", "6M", "1Y", "Sharpe"],
+    ...["Fund", "Type", "Risk", "Size", "YTD", "3Y", "5Y", "4 weeks"],
+  ];
+  const order = (view, phone) => {
+    if (view === "passing") return phone ? PHONE : DESKTOP;
+    return phone ? ["Code", "Reason", ...PHONE.slice(1)] : [...DESKTOP, "Reason"];
+  };
+  const headerLabels = (page) => page.locator("#header-row th").allTextContents();
+  // Whether each of the first rows has its cells in the header's column order.
+  const rowsFollowHeader = (page) =>
+    page.evaluate(() => {
+      const keys = [...document.querySelectorAll("#header-row th")].map((th) => th.dataset.key);
+      const trs = [...document.querySelectorAll("#funds tbody tr")].slice(0, 5);
+      const follows = (tr) =>
+        tr.cells.length === keys.length && keys.every((key, i) => tr.cells[i].classList.contains(`col-${key}`));
+      return trs.length > 0 && trs.every(follows);
+    });
+  const wrap = (page) => page.locator(".table-wrap");
+
+  async function expectOrder(page, view, phone) {
+    await expect.poll(() => headerLabels(page)).toEqual(order(view, phone));
+    expect(await rowsFollowHeader(page)).toBe(true);
+  }
+
+  for (const width of [320, 390]) {
+    for (const view of ["passing", "excluded", "all"]) {
+      test(`lead with the code and the rule numbers at ${width} px in the ${view} view`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await open(page, view === "passing" ? "" : `?view=${view}`);
+        await expectOrder(page, view, true);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      });
+    }
+  }
+
+  for (const view of ["passing", "excluded", "all"]) {
+    test(`keep today's order at 1280 px in the ${view} view`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await open(page, view === "passing" ? "" : `?view=${view}`);
+      await expectOrder(page, view, false);
+    });
+  }
+
+  // With the table scrolled fully left, these headers end inside it.
+  for (const [width, view, keys] of [
+    [390, "passing", ["1m", "3m", "6m", "1y"]],
+    [320, "passing", ["1m", "3m"]],
+    [390, "excluded", ["reason", "1m"]],
+  ]) {
+    test(`show ${keys.join(", ")} on the first screen at ${width} px in the ${view} view`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, view === "passing" ? "" : `?view=${view}`);
+      await expectOrder(page, view, true);
+      const geometry = await wrap(page).evaluate((el, keys) => {
+        el.scrollLeft = 0;
+        const right = el.getBoundingClientRect().left + el.clientLeft + el.clientWidth;
+        return {
+          right,
+          scrollLeft: el.scrollLeft,
+          headers: keys.map((key) => [
+            key,
+            document.querySelector(`#header-row th.col-${key}`).getBoundingClientRect().right,
+          ]),
+        };
+      }, keys);
+      expect(geometry.scrollLeft).toBe(0);
+      for (const [key, right] of geometry.headers) expect(right, key).toBeLessThanOrEqual(geometry.right + 0.5);
+    });
+  }
+
+  test("sort by a header click at 390 px", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await open(page);
+    await header(page, "3m").locator("button").click();
+    await expect(header(page, "3m")).toHaveAttribute("aria-sort", "descending");
+    await expect(header(page, "1m")).toHaveAttribute("aria-sort", "none");
+    await expect.poll(() => new URL(page.url()).searchParams.get("sort")).toBe("3m");
+    // Highest 3M return first, funds without one last.
+    const shown = (await page.locator("#funds tbody td.col-3m").allTextContents()).map((text) =>
+      text === "—" ? null : Number(text.replace(/[%,]/g, "")),
+    );
+    expect(shown).toHaveLength(passing.length);
+    const values = shown.filter((v) => v !== null);
+    expect(shown.slice(0, values.length)).toEqual(values);
+    expect(values).toEqual([...values].sort((a, b) => b - a));
+    await header(page, "3m").locator("button").click();
+    await expect(header(page, "3m")).toHaveAttribute("aria-sort", "ascending");
+    await expect.poll(() => new URL(page.url()).searchParams.get("dir")).toBe("asc");
+  });
+
+  for (const width of [390, 1280]) {
+    test(`a sort in the URL opens the same way at ${width} px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await open(page, "?view=excluded&sort=sharpe&dir=asc");
+      await expectOrder(page, "excluded", width <= 480);
+      await expect(header(page, "sharpe")).toHaveAttribute("aria-sort", "ascending");
+      await expect(page.locator("#header-row th[aria-sort]:not([aria-sort='none'])")).toHaveCount(1);
+      expect(new URL(page.url()).search).toBe("?view=excluded&sort=sharpe&dir=asc");
+    });
+  }
+
+  test("crossing 480 px re-renders in the other order, keeping the state and Show all", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await open(page, "?view=all");
+    await page.locator("#search").fill("a");
+    await header(page, "6m").locator("button").click();
+    await expect(header(page, "6m")).toHaveAttribute("aria-sort", "descending");
+    const showAll = page.locator("#show-all");
+    if (await showAll.isVisible()) await showAll.click();
+    await expect(page.locator("#more-rows")).toBeHidden();
+    const url = page.url();
+    const codes = await page.locator("#funds tbody td.col-code a").allTextContents();
+    expect(codes.length).toBeGreaterThan(0);
+    await expectOrder(page, "all", true);
+
+    // Focus on a header button stays on that header.
+    await header(page, "1y").locator("button").focus();
+    await page.setViewportSize({ width: 800, height: 800 });
+    await expectOrder(page, "all", false);
+    await expect(page.locator(":focus")).toHaveText("1Y");
+    expect(page.url()).toBe(url);
+    await expect(page.locator('[data-view="all"]')).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#search")).toHaveValue("a");
+    await expect(header(page, "6m")).toHaveAttribute("aria-sort", "descending");
+    await expect(page.locator("#more-rows")).toBeHidden();
+    expect(await page.locator("#funds tbody td.col-code a").allTextContents()).toEqual(codes);
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expectOrder(page, "all", true);
+    expect(page.url()).toBe(url);
+    expect(await page.locator("#funds tbody td.col-code a").allTextContents()).toEqual(codes);
+  });
+});
+
+test.describe("the table on laptop and desktop screens", () => {
+  const PASSING_LABELS = [
+    ...["Code", "Fund", "Type", "Risk", "Size"],
+    ...["1M", "3M", "6M", "1Y", "YTD", "3Y", "5Y", "Sharpe", "4 weeks"],
+  ];
+  const views = [
+    ["passing", passing.length, PASSING_LABELS],
+    ["excluded", excluded.length, [...PASSING_LABELS, "Reason"]],
+    ["all", funds.length, [...PASSING_LABELS, "Reason"]],
+  ];
+
+  // The table's full width against the wrapper it scrolls in, each header
+  // label's lines and whether it is cut off, and the fund names, types and
+  // reasons that are cut off (wider than their cell) rather than wrapped.
+  const geometry = (page) =>
+    page.evaluate(() => {
+      const wrapper = document.querySelector(".table-wrap");
+      const headers = [...document.querySelectorAll("#header-row th")].map((th) => {
+        const label = th.querySelector("button, span");
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const lines = new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+        return { text: th.textContent, lines, clipped: label.scrollWidth > label.clientWidth };
+      });
+      const cut = [...document.querySelectorAll("#funds tbody td:is(.col-name, .col-umbrella, .col-reason)")]
+        .filter((td) => td.scrollWidth > td.clientWidth)
+        .map((td) => td.textContent);
+      return {
+        table: document.querySelector("#funds").scrollWidth,
+        wrapper: wrapper.clientWidth,
+        headers,
+        cut,
+      };
+    });
+
+  async function expectFits(page, label) {
+    const g = await geometry(page);
+    expect(g.table, `${label}: table width against the wrapper`).toBeLessThanOrEqual(g.wrapper);
+    for (const h of g.headers) {
+      expect(h.lines, `${label}: ${h.text} header on one line`).toBe(1);
+      expect(h.clipped, `${label}: ${h.text} header not cut off`).toBe(false);
+    }
+    expect(g.cut, `${label}: names, types and reasons wrap`).toEqual([]);
+  }
+
+  for (const width of [1280, 1366, 1440, 1920]) {
+    test(`fits its wrapper with every column at ${width} px in every view, also after Show all`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 800 });
+      for (const [view, count, labels] of views) {
+        await open(page, `?view=${view}`);
+        await expect(page.locator("#header-row th")).toHaveText(labels);
+        await expectFits(page, view);
+        if (count > ROW_LIMIT) {
+          await showEveryRow(page, count);
+          await expectFits(page, `${view} after Show all`);
+        }
+      }
+    });
+  }
+
+  test("fits its wrapper at 1024 px in the Passing view", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 800 });
+    await open(page);
+    await expect(page.locator("#header-row th")).toHaveText(PASSING_LABELS);
+    await expectFits(page, "passing");
+  });
+
+  test("still scrolls sideways inside its wrapper where it doesn't fit", async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 800 });
+    await open(page, "?view=all");
+    const g = await page.locator(".table-wrap").evaluate((el) => {
+      el.scrollLeft = el.scrollWidth;
+      return { scrollLeft: el.scrollLeft, page: document.documentElement.scrollWidth };
+    });
+    expect(g.scrollLeft).toBeGreaterThan(0);
+    expect(g.page).toBeLessThanOrEqual(800);
   });
 });
 
