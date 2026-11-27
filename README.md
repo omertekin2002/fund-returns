@@ -262,9 +262,13 @@ The button is disabled until the data has loaded, and while no fund matches.
   response looks wrong: a TEFAS error, a missing or incomplete row, fewer
   than 200 funds, a fund list under 90% as long as the existing file's, more
   than 40% of funds without a 1M, 3M, 6M or 1Y return (missing or exactly 0,
-  which would mean TEFAS sent an empty column), or prices for too few dates
-  or funds or a price list that may be cut off. The limits are constants at
-  the top of the script.
+  which would mean TEFAS sent an empty column), prices for too few dates
+  or funds or a price list that may be cut off, or a price window that
+  suggests one of its requests came back empty: two consecutive price dates
+  more than 14 days apart, a last price date more than 14 days before the
+  Istanbul fetch day, or a last price date earlier than the existing file's
+  (an equal one, on a holiday or a second run, is fine). The limits are
+  constants at the top of the script.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier

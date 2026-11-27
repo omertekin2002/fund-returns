@@ -78,6 +78,13 @@ MAX_PRICE_ROWS = 100000
 # 26 weeks hold ~125 business days; the public holidays in them remove up to
 # ~15, so far fewer means a response is broken.
 MIN_PRICE_DATES = 100
+# The window is many requests, and TEFAS may answer one with an empty list and
+# no error, leaving a hole of about a month (or a stale end) that the count
+# above doesn't catch. In the 42 editions with prices up to 2026-11-27,
+# consecutive price dates were never more than 6 days apart, and the last one
+# was never more than 1 day before the Istanbul fetch day. The longest market
+# closure, a 9-day bayram holiday with its weekends, leaves a 10-day gap.
+MAX_PRICE_GAP_DAYS = 14
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 HEADERS = {
@@ -255,21 +262,33 @@ def check_returns(funds):
             )
 
 
-def check_fund_count(funds, output):
-    """Raise ValueError if funds is much shorter than the existing output's list.
+def read_output(output):
+    """The existing output file's data as a dict, or None.
 
-    A missing, unreadable or invalid output file, or one without a funds list,
-    skips the check.
+    A missing, unreadable or invalid file, or one that isn't a JSON object,
+    gives None, so the checks that compare against it are skipped.
     """
     try:
         with open(output, encoding="utf-8") as handle:
             data = json.load(handle)
-        old_count = len(data["funds"]) if isinstance(data["funds"], list) else None
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def check_fund_count(funds, existing):
+    """Raise ValueError if funds is much shorter than the existing data's list.
+
+    existing is the existing output file's data (see read_output). None, or
+    data without a funds list, skips the check.
+    """
+    old_funds = existing.get("funds") if existing else None
+    if not isinstance(old_funds, list):
         return
-    if old_count is None or len(funds) * 100 >= MIN_KEPT_FUNDS_PERCENT * old_count:
+    old_count = len(old_funds)
+    if len(funds) * 100 >= MIN_KEPT_FUNDS_PERCENT * old_count:
         return
-    old_fetched_at = data.get("fetchedAt")
+    old_fetched_at = existing.get("fetchedAt")
     since = (
         f"the data fetched at {old_fetched_at}"
         if isinstance(old_fetched_at, str)
@@ -279,6 +298,41 @@ def check_fund_count(funds, output):
         f"Only {len(funds):,} funds returned, down from {old_count:,} in {since} "
         f"(expected at least {MIN_KEPT_FUNDS_PERCENT}%)"
     )
+
+
+def check_price_dates(dates, today, existing):
+    """Raise ValueError if the price window looks like a request came back empty.
+
+    dates are the window's price dates ("YYYY-MM-DD", sorted), today is the
+    Istanbul fetch day, and existing is the existing output file's data (see
+    read_output). The window is refused when two consecutive dates, or its last
+    date and today, are more than MAX_PRICE_GAP_DAYS apart, or when its last
+    date is earlier than the existing data's. Existing data without a valid
+    last price date skips that last check; an equal date (a holiday, or a
+    second run) passes.
+    """
+    days = [date.fromisoformat(day) for day in dates]
+    for earlier, later in zip(days, days[1:]):
+        gap = (later - earlier).days
+        if gap > MAX_PRICE_GAP_DAYS:
+            raise ValueError(
+                f"Price dates jump from {earlier} to {later} ({gap} days; at most "
+                f"{MAX_PRICE_GAP_DAYS} expected); a TEFAS price request may have "
+                "come back empty"
+            )
+    age = (today - days[-1]).days
+    if age > MAX_PRICE_GAP_DAYS:
+        raise ValueError(
+            f"The last price date {days[-1]} is {age} days before {today} (at most "
+            f"{MAX_PRICE_GAP_DAYS} expected); the last TEFAS price request may have "
+            "come back empty"
+        )
+    old_last = last_price_date(existing) if existing else None
+    if old_last and dates[-1] < old_last:
+        raise ValueError(
+            f"The last price date {dates[-1]} is earlier than {old_last} in the "
+            "existing data; a TEFAS price request may have come back empty"
+        )
 
 
 def price_ranges(start, end):
@@ -482,14 +536,16 @@ def main():
     output = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OUTPUT
     previous = os.path.join(os.path.dirname(output), "previous.json")
     now = datetime.now(timezone.utc).replace(microsecond=0)
+    existing = read_output(output)
     funds = parse(fetch_json(API_URL, PAYLOAD, PAGE_URL))
-    check_fund_count(funds, output)
+    check_fund_count(funds, existing)
 
     end = now.astimezone(ISTANBUL).date()
     start = end - timedelta(days=PRICE_WINDOW_DAYS)
     codes = [fund["code"] for fund in funds]
     price_responses = fetch_prices(start, end)
     price_dates, prices = parse_prices(price_responses, codes)
+    check_price_dates(price_dates, end, existing)
     sizes = parse_sizes(price_responses, set(codes))
     for fund in funds:
         fund["size"] = sizes[fund["code"]]
