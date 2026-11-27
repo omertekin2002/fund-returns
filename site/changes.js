@@ -1,6 +1,7 @@
 // Which funds entered or left the passing list since the previous update.
-// data/previous.json is the last earlier day's data/funds.json (kept by
-// scripts/fetch_funds.py); both are classified with the same rules.
+// data/previous.json is the last earlier price day's data/funds.json (kept
+// by scripts/fetch_funds.py, which leaves it alone on TEFAS holidays); both
+// are classified with the same rules.
 import { exclusionReason } from "./filter.js";
 import { riskFreeReturns, sharpePeriod, sharpeRatio } from "./sharpe.js";
 
