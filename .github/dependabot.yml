@@ -2,7 +2,9 @@
 # dependencies (Playwright and axe). Each ecosystem gets at most one grouped PR
 # a month, and only for releases at least 7 days old. The PRs run test.yml like
 # any other PR (read-only token) and are merged by the owner. scripts/ uses only
-# the Python standard library, so there is no pip entry.
+# the Python standard library, so there is no pip entry. Dependabot doesn't
+# update the `docker://rhysd/actionlint` image in test.yml's lint job, so that
+# version is bumped by hand (here and in the README's local command).
 version: 2
 updates:
   - package-ecosystem: github-actions
