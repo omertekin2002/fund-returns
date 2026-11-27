@@ -4,7 +4,7 @@ import { coverageText, dataCoverage, priceWindowText } from "./coverage.js";
 import { csvColumns, csvFileName, toCsv } from "./csv.js";
 import { emptyMessage, inView } from "./empty.js";
 import { RULES } from "./filter.js";
-import { isStale } from "./freshness.js";
+import { isStale, pricesBehindText } from "./freshness.js";
 import { cappedText, ROW_LIMIT, showAllText, visibleRows } from "./rowlimit.js";
 import { ruleCounts, ruleCountsNote, ruleCountText } from "./rulecounts.js";
 import { formatSize } from "./size.js";
@@ -507,15 +507,27 @@ async function init() {
     els.priceDates.title = "The first and last day with TEFAS prices in the data";
     els.coverage.textContent = coverageText(coverage.counts);
     els.coverage.hidden = false;
+    // Prices whose last date is two or more weekdays before the update.
+    const behind = pricesBehindText(data.fetchedAt, coverage.window?.last);
     els.status.textContent =
       `Every weekday morning around 10:15 Istanbul time, all ${countFormat.format(state.funds.length)} ` +
       "funds traded on TEFAS are checked against six rules. " +
       `${countFormat.format(passing)} pass all six and are listed above.` +
-      (stale ? " The latest daily update is missing, so these figures may be out of date." : "");
+      (stale ? " The latest daily update is missing, so these figures may be out of date." : "") +
+      (behind ? " The latest TEFAS prices are older than this update, so these figures describe an earlier day." : "");
+    // A stale update and lagging prices are separate problems, so when both
+    // apply the warning says both, the stale one first.
+    const warnings = [];
     if (stale) {
-      els.stale.textContent = fetchedAt
-        ? `Data may be out of date: last updated ${fetchedAt} Istanbul time. The daily update has not run since.`
-        : "Data may be out of date: the time of the last update is unknown.";
+      warnings.push(
+        fetchedAt
+          ? `Data may be out of date: last updated ${fetchedAt} Istanbul time. The daily update has not run since.`
+          : "Data may be out of date: the time of the last update is unknown.",
+      );
+    }
+    if (behind) warnings.push(behind);
+    if (warnings.length > 0) {
+      els.stale.textContent = warnings.join(" ");
       els.stale.hidden = false;
     }
   } catch (error) {

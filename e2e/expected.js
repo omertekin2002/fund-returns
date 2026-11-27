@@ -92,3 +92,21 @@ export function previousData() {
   const changes = membershipChanges(funds, classifyFunds(previous.funds));
   return { previous, changes, enteredCodes, leftCodes, goneCode: goneFund.code, newCode };
 }
+
+// The data with its fetchedAt moved to 10:15 Istanbul time on `day`
+// ("YYYY-MM-DD"), so its prices end that many days before the update.
+export const fetchedOn = (fundsData, day) => ({
+  ...fundsData,
+  fetchedAt: new Date(`${day}T10:15:00+03:00`).toISOString(),
+});
+
+// The calendar day `days` days after a "YYYY-MM-DD" day; with weekdays, the
+// `days`-th weekday after it.
+export function daysAfter(day, days, { weekdays = false } = {}) {
+  let time = Date.parse(`${day}T00:00:00Z`);
+  for (let left = days; left > 0; ) {
+    time += 24 * 60 * 60 * 1000;
+    if (!weekdays || ![0, 6].includes(new Date(time).getUTCDay())) left -= 1;
+  }
+  return new Date(time).toISOString().slice(0, 10);
+}

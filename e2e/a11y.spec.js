@@ -4,7 +4,7 @@
 // Run with: npm run test:e2e (or npx playwright test e2e/a11y.spec.js)
 import { test, expect } from "./fixtures.js";
 import AxeBuilder from "@axe-core/playwright";
-import { committedData, data, formatCount, passing, previousData } from "./expected.js";
+import { committedData, coverage, data, daysAfter, fetchedOn, formatCount, passing, previousData } from "./expected.js";
 import { ROW_LIMIT } from "../site/rowlimit.js";
 import { withoutPassingFunds } from "../tests/fund-fixtures.mjs";
 
@@ -137,6 +137,20 @@ test.describe("axe finds no WCAG 2.1 A/AA violations", () => {
     await page.route("**/data/funds.json", (route) => route.fulfill({ status: 500, body: "" }));
     await page.goto("./");
     await expect(page.locator("#status")).toHaveText("Could not load fund data: HTTP 500");
+    await expectNoViolations(page);
+  });
+});
+
+// Data whose prices end a week before the update, so the page warns that
+// they lag it.
+test.describe("axe when the prices lag the update", () => {
+  const lagging = fetchedOn(data, daysAfter(coverage.window.last, 7));
+  test.use({ fundsData: lagging });
+
+  test("finds no violations with the warning shown", async ({ page }) => {
+    await page.clock.setFixedTime(new Date(new Date(lagging.fetchedAt).getTime() + 60 * 1000));
+    await open(page);
+    await expect(page.locator("#stale")).toContainText("TEFAS prices end on");
     await expectNoViolations(page);
   });
 });

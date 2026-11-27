@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { RULES } from "../site/filter.js";
 import { changesSummary, classifyFunds, membershipChanges } from "../site/changes.js";
 import { coverageText, priceWindowText } from "../site/coverage.js";
-import { istanbulDate } from "../site/freshness.js";
+import { istanbulDate, pricesBehindText } from "../site/freshness.js";
 import { ROW_LIMIT } from "../site/rowlimit.js";
 import { ruleCountsNote, ruleCountText } from "../site/rulecounts.js";
 import { formatSize } from "../site/size.js";
@@ -14,7 +14,9 @@ import {
   committedPrevious,
   coverage,
   data,
+  daysAfter,
   excluded,
+  fetchedOn,
   filtered,
   formatCount,
   funds,
@@ -1403,6 +1405,79 @@ test.describe("stale data warning", () => {
     await open(page);
     await expect(page.locator("#stale")).toBeVisible();
     await expect(page.locator("#stale")).toContainText("Data may be out of date");
+  });
+});
+
+// The prices' last date against the update's Istanbul day (see pricesBehind
+// in freshness.js): one weekday behind is normal, two or more get a warning.
+test.describe("prices behind the update", () => {
+  const lastPrice = coverage.window.last;
+  const minute = 60 * 1000;
+  // Opens the page a minute after the served data's fetchedAt, so the update
+  // itself is fresh.
+  const openJustAfter = async (page, fundsData) => {
+    await page.clock.setFixedTime(new Date(new Date(fundsData.fetchedAt).getTime() + minute));
+    await open(page);
+  };
+
+  test("no warning when the prices end on the fetch day", async ({ page }) => {
+    await openJustAfter(page, data);
+    await expect(page.locator("#updated")).toContainText("Updated");
+    await expect(page.locator("#stale")).toBeHidden();
+    await expect(page.locator("#status")).not.toContainText("older than this update");
+  });
+
+  test.describe("one weekday behind", () => {
+    const oneBehind = fetchedOn(data, daysAfter(lastPrice, 1, { weekdays: true }));
+    test.use({ fundsData: oneBehind });
+
+    test("shows no warning", async ({ page }) => {
+      await openJustAfter(page, oneBehind);
+      await expect(page.locator("#stale")).toBeHidden();
+      await expect(page.locator("#status")).not.toContainText("older than this update");
+    });
+  });
+
+  test.describe("a week behind", () => {
+    const fetchDay = daysAfter(lastPrice, 7);
+    const lagging = fetchedOn(data, fetchDay);
+    const message = pricesBehindText(lagging.fetchedAt, lastPrice);
+    test.use({ fundsData: lagging });
+
+    test("warns and names both dates", async ({ page }) => {
+      await openJustAfter(page, lagging);
+      const stale = page.locator("#stale");
+      await expect(stale).toBeVisible();
+      await expect(stale).toHaveText(message);
+      const format = (day) =>
+        new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle: "medium" }).format(new Date(`${day}T00:00:00Z`));
+      await expect(stale).toContainText(`TEFAS prices end on ${format(lastPrice)}`);
+      await expect(stale).toContainText(`before this update on ${format(fetchDay)}`);
+      await expect(stale).not.toContainText("Data may be out of date");
+      await expect(page.locator("#status")).toContainText(
+        "The latest TEFAS prices are older than this update, so these figures describe an earlier day.",
+      );
+    });
+
+    test("says both when the update is stale too, the stale warning first", async ({ page }) => {
+      await page.clock.setFixedTime(new Date(new Date(lagging.fetchedAt).getTime() + 7 * 24 * 60 * minute));
+      await open(page);
+      const stale = page.locator("#stale");
+      await expect(stale).toBeVisible();
+      await expect(stale).toHaveText(/^Data may be out of date: .* The daily update has not run since\. TEFAS prices end on /);
+      await expect(stale).toContainText(message);
+      await expect(page.locator("#status")).toContainText("may be out of date");
+      await expect(page.locator("#status")).toContainText("older than this update");
+    });
+
+    test("wraps inside a 390 px screen", async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await openJustAfter(page, lagging);
+      const box = await page.locator("#stale").boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(390);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    });
   });
 });
 
