@@ -267,8 +267,10 @@ The button is disabled until the data has loaded, and while no fund matches.
   suggests one of its requests came back empty: two consecutive price dates
   more than 14 days apart, a last price date more than 14 days before the
   Istanbul fetch day, or a last price date earlier than the existing file's
-  (an equal one, on a holiday or a second run, is fine). The limits are
-  constants at the top of the script.
+  (an equal one, on a holiday or a second run, is fine), or one that came
+  back only partly: a price date with prices for under 80% of the funds
+  priced anywhere in the window (every date in the committed editions had at
+  least 95%). The limits are constants at the top of the script.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier

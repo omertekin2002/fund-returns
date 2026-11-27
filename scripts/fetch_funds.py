@@ -12,6 +12,11 @@ Usage: python3 scripts/fetch_funds.py [output_path]
 
 Uses only the Python standard library so the workflow needs no install step.
 The output file is only replaced after the response passes validation.
+Among other checks, the price window is refused when it looks like one of its
+TEFAS requests came back empty (a hole of more than two weeks between price
+dates, a stale last date, or one earlier than the existing file's) or only
+partly (a price date with prices for under 80% of the funds priced in the
+window).
 
 A NaN or infinite return or price from TEFAS (a JSON token, or a string such
 as "NaN" or "Infinity") counts as missing, like an empty value: the browser's
@@ -91,6 +96,12 @@ MIN_PRICE_DATES = 100
 # was never more than 1 day before the Istanbul fetch day. The longest market
 # closure, a 9-day bayram holiday with its weekends, leaves a 10-day gap.
 MAX_PRICE_GAP_DAYS = 14
+# A request may also come back partly, with rows for only some of the funds,
+# leaving them without about a month of prices. In the same 42 editions, every
+# price date had prices for at least 95.0% of the funds priced anywhere in the
+# window (the lowest were early dates, before some funds launched, and the
+# fetch day itself: 1,021 of 1,074 on 2026-11-13).
+MIN_DATE_COVERAGE_PERCENT = 80
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 HEADERS = {
@@ -349,6 +360,26 @@ def check_price_dates(dates, today, existing):
         )
 
 
+def check_price_coverage(dates, prices):
+    """Raise ValueError if a price date has prices for few of the window's funds.
+
+    dates are the window's price dates and prices maps each fund code to its
+    price (or None) on each date, as parse_prices returns them. The window is
+    refused when any date has a price for fewer than MIN_DATE_COVERAGE_PERCENT%
+    of the funds that have a price on any date, which suggests a TEFAS price
+    request came back only partly.
+    """
+    priced = [fund_prices for fund_prices in prices.values() if any(fund_prices)]
+    for index, day in enumerate(dates):
+        count = sum(1 for fund_prices in priced if fund_prices[index])
+        if count * 100 < MIN_DATE_COVERAGE_PERCENT * len(priced):
+            raise ValueError(
+                f"Prices on {day} for only {count:,} of the {len(priced):,} funds "
+                f"priced in the window (expected at least {MIN_DATE_COVERAGE_PERCENT}%); "
+                "a TEFAS price request may have come back only partly"
+            )
+
+
 def price_ranges(start, end):
     """Split start..end (dates, both included) into ranges TEFAS accepts.
 
@@ -591,6 +622,7 @@ def main():
     price_responses = fetch_prices(start, end)
     price_dates, prices = parse_prices(price_responses, codes)
     check_price_dates(price_dates, end, existing)
+    check_price_coverage(price_dates, prices)
     sizes = parse_sizes(price_responses, set(codes))
     for fund in funds:
         fund["size"] = sizes[fund["code"]]

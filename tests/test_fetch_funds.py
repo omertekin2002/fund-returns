@@ -1191,6 +1191,82 @@ class CheckPriceDatesTest(unittest.TestCase):
                 self.check(dates, existing=existing)
 
 
+class CheckPriceCoverageTest(unittest.TestCase):
+    """check_price_coverage() refuses a date that few of the window's funds have prices on."""
+
+    DATES = business_days(date(2026, 6, 1), date(2026, 11, 27))
+    CODES = [f"F{n:04d}" for n in range(1000)]
+
+    def window(self):
+        """Every fund priced on every date."""
+        return {code: [1.5] * len(self.DATES) for code in self.CODES}
+
+    def drop(self, prices, day, count):
+        """Remove the price on day for the first count funds."""
+        index = self.DATES.index(day)
+        for code in self.CODES[:count]:
+            prices[code][index] = None
+        return prices
+
+    def check(self, prices):
+        fetch_funds.check_price_coverage(self.DATES, prices)
+
+    def test_accepts_a_full_window(self):
+        self.check(self.window())
+
+    def test_rejects_a_date_left_partly_priced_by_a_middle_request(self):
+        prices = self.window()
+        # The request for 2026-08-22..2026-09-19 answered for half the funds.
+        for day in self.DATES:
+            if "2026-08-22" <= day <= "2026-09-19":
+                self.drop(prices, day, 500)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^Prices on 2026-08-24 for only 500 of the 1,000 funds priced in the "
+            r"window \(expected at least 80%\); a TEFAS price request may have come "
+            r"back only partly$",
+        ):
+            self.check(prices)
+
+    def test_rejects_a_partly_priced_last_date(self):
+        prices = self.drop(self.window(), "2026-11-27", 201)
+        with self.assertRaisesRegex(ValueError, r"^Prices on 2026-11-27 for only 799 of the 1,000 funds"):
+            self.check(prices)
+
+    def test_the_limit_is_80_percent(self):
+        self.check(self.drop(self.window(), "2026-09-15", 200))  # 800 of 1,000
+        with self.assertRaisesRegex(ValueError, r"^Prices on 2026-09-15 for only 799 of"):
+            self.check(self.drop(self.window(), "2026-09-15", 201))
+
+    def test_funds_without_any_price_dont_count(self):
+        # 300 funds with no price at all (closed, or not yet launched) leave
+        # the other 700 priced on every date.
+        prices = self.window()
+        for code in self.CODES[:300]:
+            prices[code] = [None] * len(self.DATES)
+        self.check(prices)
+
+    def test_a_fund_launched_late_in_the_window_passes(self):
+        # 150 funds (15%) launched in the window's last month have no prices
+        # before it: the earlier dates still have prices for 85%.
+        prices = self.window()
+        for day in self.DATES:
+            if day < "2026-10-30":
+                self.drop(prices, day, 150)
+        self.check(prices)
+
+    def test_accepts_the_committed_editions(self):
+        for name in ["funds.json", "previous.json"]:
+            path = REPO / "site" / "data" / name
+            if not path.exists():
+                continue
+            with self.subTest(name=name):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                fetch_funds.check_price_coverage(
+                    data["priceDates"], {fund["code"]: fund["prices"] for fund in data["funds"]}
+                )
+
+
 class FixedDatetime(fetch_funds.datetime):
     @classmethod
     def now(cls, tz=None):
@@ -1326,15 +1402,17 @@ class MainTest(unittest.TestCase):
         self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
         self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
 
-    def window_responses(self, empty=None):
+    def window_responses(self, empty=None, partial=None):
         """Price responses for a window of three requests, with weekday prices.
 
-        The request at index empty, if given, returns no rows.
+        The request at index empty, if given, returns no rows; the one at
+        index partial, if given, returns rows for the first fund only.
         """
         ranges = fetch_funds.price_ranges(date(2026, 10, 3) - timedelta(days=86), date(2026, 10, 3))
         self.assertEqual(len(ranges), 3)
         return [
-            {"resultList": []} if n == empty else prices_response(dates=business_days(*bounds))
+            {"resultList": []} if n == empty
+            else prices_response(codes=CODES[:1] if n == partial else CODES, dates=business_days(*bounds))
             for n, bounds in enumerate(ranges)
         ]
 
@@ -1349,6 +1427,15 @@ class MainTest(unittest.TestCase):
                 [funds_response(), *self.window_responses(empty=1)],
                 r"^Price dates jump from 2026-08-06 to 2026-09-07 \(32 days; at most 14 expected\)",
             )
+
+    def test_a_partial_middle_or_last_price_request_changes_neither_file(self):
+        with mock.patch.multiple(fetch_funds, PRICE_WINDOW_DAYS=86, MAX_PRICE_ROWS=1000):
+            for partial, message in [
+                (1, r"^Prices on 2026-08-07 for only 1 of the 3 funds priced in the window"),
+                (2, r"^Prices on 2026-09-07 for only 1 of the 3 funds priced in the window"),
+            ]:
+                with self.subTest(partial=partial):
+                    self.assert_refused([funds_response(), *self.window_responses(partial=partial)], message)
 
     def test_a_stale_or_older_price_window_changes_neither_file(self):
         for dates, message in [
@@ -1376,7 +1463,9 @@ class MainTest(unittest.TestCase):
                 row["fiyat"] = {"2026-09-30": float("nan"), "2026-10-01": "Infinity", "2026-10-02": 1.75}[row["tarih"]]
             elif row["fonKodu"] == "CCC" and row["tarih"] == "2026-10-02":
                 row["fiyat"] = float("-inf")
-        self.run_main([funds, prices])
+        # With three funds, one missing price leaves a date at 67%.
+        with mock.patch.object(fetch_funds, "MIN_DATE_COVERAGE_PERCENT", 60):
+            self.run_main([funds, prices])
         text = self.output.read_text(encoding="utf-8")
         self.assertNotRegex(text, r"NaN|Infinity")
         new = fetch_funds.parse_strict(text)
