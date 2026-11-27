@@ -903,7 +903,8 @@ class CheckFundCountTest(unittest.TestCase):
         self.output.write_text(data_file(fetched_at, codes), encoding="utf-8")
 
     def check(self, count):
-        fetch_funds.check_fund_count(funds_of(count), str(self.output))
+        existing = fetch_funds.read_output(str(self.output))
+        fetch_funds.check_fund_count(funds_of(count), existing)
 
     def test_accepts_90_percent_or_more_of_the_last_list(self):
         self.write_old(10)
@@ -954,10 +955,126 @@ class CheckFundCountTest(unittest.TestCase):
         self.check(1)
 
 
+def business_days(first, last):
+    """The "YYYY-MM-DD" weekdays from first to last (dates), both included."""
+    days = []
+    while first <= last:
+        if first.weekday() < 5:
+            days.append(first.isoformat())
+        first += timedelta(days=1)
+    return days
+
+
+class ReadOutputTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name) / "funds.json"
+
+    def read(self):
+        return fetch_funds.read_output(str(self.output))
+
+    def test_returns_the_data(self):
+        self.output.write_text(data_file("2026-11-20T07:15:31Z"), encoding="utf-8")
+        self.assertEqual(self.read()["priceDates"], EARLIER_DATES)
+
+    def test_none_for_a_missing_unreadable_or_non_object_file(self):
+        self.assertIsNone(self.read())
+        for text in ["not json", "", "[]", '"funds"', "5", "null"]:
+            with self.subTest(text=text):
+                self.output.write_text(text, encoding="utf-8")
+                self.assertIsNone(self.read())
+        self.output.write_bytes(b"\xff\xfe not utf-8")
+        self.assertIsNone(self.read())
+        self.output.write_text("{}", encoding="utf-8")
+        with mock.patch("builtins.open", side_effect=PermissionError("denied")):
+            self.assertIsNone(self.read())
+
+
+class CheckPriceDatesTest(unittest.TestCase):
+    """check_price_dates() refuses a window with a hole, a stale end or an older end."""
+
+    TODAY = date(2026, 11, 27)  # a Friday
+    # The 2026-11-27 edition's window: 2026-06-01 to 2026-11-27, weekdays
+    # (the real one also skips holidays).
+    WINDOW = business_days(date(2026, 6, 1), date(2026, 11, 27))
+
+    def check(self, dates=None, today=TODAY, existing=None):
+        fetch_funds.check_price_dates(dates or self.WINDOW, today, existing)
+
+    def existing(self, last):
+        return {"fetchedAt": "2026-11-26T07:15:31Z", "funds": [], "priceDates": ["2026-06-01", last]}
+
+    def test_accepts_a_normal_window(self):
+        self.check()
+        self.check(existing=self.existing("2026-11-26"))
+
+    def test_rejects_a_hole_left_by_an_empty_middle_request(self):
+        # The request for 2026-08-22..2026-09-19 came back empty.
+        dates = [day for day in self.WINDOW if not "2026-08-22" <= day <= "2026-09-19"]
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^Price dates jump from 2026-08-21 to 2026-09-21 \(31 days; at most 14 "
+            r"expected\); a TEFAS price request may have come back empty$",
+        ):
+            self.check(dates)
+
+    def test_the_gap_limit_is_more_than_14_days(self):
+        # A 9-day bayram holiday with its weekends: 10 days between price dates.
+        for last_before, first_after, gap in [
+            ("2026-05-22", "2026-06-01", 10),
+            ("2026-05-15", "2026-05-29", 14),
+        ]:
+            with self.subTest(gap=gap):
+                dates = ["2026-05-14", last_before, first_after, *self.WINDOW]
+                self.check(sorted(set(dates)))
+        with self.assertRaisesRegex(ValueError, r"from 2026-05-15 to 2026-05-30 \(15 days"):
+            self.check(["2026-05-15", "2026-05-30", *self.WINDOW])
+
+    def test_rejects_a_stale_end_left_by_an_empty_last_request(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-12"]
+        self.check(dates, today=date(2026, 11, 26))  # 14 days before
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^The last price date 2026-11-12 is 15 days before 2026-11-27 \(at most 14 "
+            r"expected\); the last TEFAS price request may have come back empty$",
+        ):
+            self.check(dates)
+
+    def test_rejects_a_window_that_ends_before_the_existing_one(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-25"]
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^The last price date 2026-11-25 is earlier than 2026-11-26 in the "
+            r"existing data; a TEFAS price request may have come back empty$",
+        ):
+            self.check(dates, existing=self.existing("2026-11-26"))
+
+    def test_an_equal_last_date_is_accepted(self):
+        # A holiday, or a second run on the same day.
+        self.check(existing=self.existing("2026-11-27"))
+
+    def test_existing_data_without_a_valid_last_price_date_skips_that_check(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-20"]
+        for existing in [
+            None,
+            {},
+            {"funds": []},
+            {"priceDates": None},
+            {"priceDates": []},
+            {"priceDates": "2026-11-26"},
+            {"priceDates": ["2026-11-26", "not a date"]},
+            {"priceDates": ["2026-11-26", 20261126]},
+        ]:
+            with self.subTest(existing=existing):
+                self.check(dates, existing=existing)
+
+
 class FixedDatetime(fetch_funds.datetime):
     @classmethod
     def now(cls, tz=None):
-        return cls(2026, 10, 28, 7, 15, 0, 123, tzinfo=tz)
+        # 10:15 on Saturday 3 Oct in Istanbul, the day after DATES[-1].
+        return cls(2026, 10, 3, 7, 15, 0, 123, tzinfo=tz)
 
 
 @small_limits
@@ -987,16 +1104,16 @@ class MainTest(unittest.TestCase):
             fetch_funds.main()
 
     def test_moves_yesterdays_data_to_previous(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
         new = json.loads(self.output.read_text(encoding="utf-8"))
-        self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(new["fetchedAt"], "2026-10-03T07:15:00Z")
         self.assertEqual(codes_of(new["funds"]), CODES)
 
     def test_a_second_run_on_the_same_day_keeps_previous(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.run_main()
@@ -1005,14 +1122,14 @@ class MainTest(unittest.TestCase):
 
     def test_a_holiday_run_keeps_previous(self):
         # The old file ends on the same price date as the mocked prices.
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"], DATES)
-        kept = data_file("2026-10-26T07:15:00Z", ["OLDER"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"], DATES)
+        kept = data_file("2026-10-01T07:15:00Z", ["OLDER"])
         self.output.write_text(old, encoding="utf-8")
         self.previous.write_text(kept, encoding="utf-8")
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
         new = json.loads(self.output.read_text(encoding="utf-8"))
-        self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(new["fetchedAt"], "2026-10-03T07:15:00Z")
         self.assertEqual(codes_of(new["funds"]), CODES)
         self.assertIn("no new price date since 2026-10-02", sys.stdout.getvalue())
 
@@ -1040,8 +1157,8 @@ class MainTest(unittest.TestCase):
         self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
 
     def test_a_failed_or_invalid_fetch_changes_neither_file(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
-        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
         for responses in [
             [RuntimeError("Could not fetch data from TEFAS")],
             [funds_response(CODES[:1]), prices_response()],  # too few funds
@@ -1058,8 +1175,8 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
 
     def test_a_much_shorter_fund_list_changes_neither_file(self):
-        old = data_file("2026-10-27T07:15:00Z", ["AAA", "BBB", "CCC", "DDD"])
-        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        old = data_file("2026-10-02T07:15:00Z", ["AAA", "BBB", "CCC", "DDD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
         self.output.write_text(old, encoding="utf-8")
         self.previous.write_text(kept, encoding="utf-8")
         # 3 of 4 is 75%. Refused before the prices are fetched.
@@ -1067,7 +1184,7 @@ class MainTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 r"^Only 3 funds returned, down from 4 in the data fetched at "
-                r"2026-10-27T07:15:00Z \(expected at least 90%\)$",
+                r"2026-10-02T07:15:00Z \(expected at least 90%\)$",
             ):
                 fetch_funds.main()
         self.assertEqual(fetch.call_count, 1)
@@ -1075,12 +1192,65 @@ class MainTest(unittest.TestCase):
         self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
         self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
 
+    def assert_refused(self, responses, message):
+        """main() raises ValueError matching message and changes neither file."""
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(kept, encoding="utf-8")
+        with mock.patch.object(fetch_funds.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, message):
+                self.run_main(responses)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), old)
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
+
+    def window_responses(self, empty=None):
+        """Price responses for a window of three requests, with weekday prices.
+
+        The request at index empty, if given, returns no rows.
+        """
+        ranges = fetch_funds.price_ranges(date(2026, 10, 3) - timedelta(days=86), date(2026, 10, 3))
+        self.assertEqual(len(ranges), 3)
+        return [
+            {"resultList": []} if n == empty else prices_response(dates=business_days(*bounds))
+            for n, bounds in enumerate(ranges)
+        ]
+
+    def test_an_empty_middle_price_request_changes_neither_file(self):
+        # A window of three requests, each with more rows than MAX_ROWS.
+        with mock.patch.multiple(fetch_funds, PRICE_WINDOW_DAYS=86, MAX_PRICE_ROWS=1000):
+            # The full window passes, so only the empty request is refused.
+            with mock.patch.object(fetch_funds.time, "sleep"):
+                self.run_main([funds_response(), *self.window_responses()])
+            self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["priceDates"][-1], "2026-10-02")
+            self.assert_refused(
+                [funds_response(), *self.window_responses(empty=1)],
+                r"^Price dates jump from 2026-08-06 to 2026-09-07 \(32 days; at most 14 expected\)",
+            )
+
+    def test_a_stale_or_older_price_window_changes_neither_file(self):
+        for dates, message in [
+            # The last request came back empty: 16 days before 3 Oct.
+            (["2026-09-15", "2026-09-16", "2026-09-17"], r"^The last price date 2026-09-17 is 16 days before 2026-10-03"),
+            # Ends before the existing file's 2026-10-01.
+            (["2026-09-28", "2026-09-29", "2026-09-30"], r"^The last price date 2026-09-30 is earlier than 2026-10-01 in the existing data"),
+        ]:
+            with self.subTest(dates=dates):
+                self.assert_refused([funds_response(), prices_response(dates=dates)], message)
+
+    def test_a_price_window_ending_on_the_existing_last_date_is_written(self):
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"], DATES)
+        self.output.write_text(old, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["funds"][0]["code"], "AAA")
+
     def test_a_list_at_least_90_percent_as_long_is_written(self):
-        old = data_file("2026-10-27T07:15:00Z", CODES)
+        old = data_file("2026-10-02T07:15:00Z", CODES)
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
-        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["fetchedAt"], "2026-10-03T07:15:00Z")
 
 
 if __name__ == "__main__":
