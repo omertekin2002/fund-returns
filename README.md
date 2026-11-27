@@ -7,7 +7,9 @@ and Sharpe ratio criteria. A GitHub Actions workflow refreshes the data every we
 job starts it, because GitHub starts its own scheduled runs hours late. The
 page shows the time the data was actually fetched, and shows a warning when a
 whole weekday has gone by without an update (see
-[`site/freshness.js`](site/freshness.js)).
+[`site/freshness.js`](site/freshness.js)). It also warns when the prices lag
+the update: the last TEFAS price date is two or more weekdays before the
+fetch day.
 The table can be narrowed to one fund type (umbrella) and one risk level
 (1–7, exactly that level; funds with no risk level only show without a risk
 filter). The Passing / Excluded / All counts follow these filters; the
@@ -462,7 +464,10 @@ restored from the URL, with unknown values ignored; that the banner's price date
 `coverage.js` works out from the data, don't change with the view, filters or
 search, say `Price dates unknown` without errors when `priceDates` is missing
 or malformed, and fit a 320 px screen; that the stale data
-warning appears only when the data is old; that a failed data request
+warning appears only when the data is old, and that the warning names both
+dates when the last price date is two or more weekdays before the update (but
+not one), fits a 390 px screen and follows the stale warning when both apply;
+that a failed data request
 shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
 changes (and from the committed one), fit a 320 px screen, and are left out
@@ -497,7 +502,8 @@ Show all button and with every row), the Passing view and the All view with
 the Show all button at 320 px, the Passing and Excluded views at 390 px
 (in the phone column order), a search that
 matches nothing, filters and a search that leave no fund (with the button that
-clears them), stale data and a failed data request; and it tabs through
+clears them), stale data, prices that lag the update and a failed data
+request; and it tabs through
 every control on the page, with rows, with the Show all button and with the
 clear button showing, and
 checks that each one gets a focus outline with at least 3:1 contrast against
