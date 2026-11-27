@@ -7,7 +7,9 @@ and Sharpe ratio criteria. A GitHub Actions workflow refreshes the data every we
 job starts it, because GitHub starts its own scheduled runs hours late. The
 page shows the time the data was actually fetched, and shows a warning when a
 whole weekday has gone by without an update (see
-[`site/freshness.js`](site/freshness.js)).
+[`site/freshness.js`](site/freshness.js)). It also warns when the prices lag
+the update: the last TEFAS price date is two or more weekdays before the
+fetch day.
 The table can be narrowed to one fund type (umbrella) and one risk level
 (1–7, exactly that level; funds with no risk level only show without a risk
 filter). The Passing / Excluded / All counts follow these filters; the
@@ -92,10 +94,16 @@ longer in the data: OLD.".
 
 - Before each update, [`scripts/fetch_funds.py`](scripts/fetch_funds.py)
   keeps the existing `site/data/funds.json` as
-  [`site/data/previous.json`](site/data/previous.json), but only if it is
-  from an earlier Istanbul day. A second run on the same day keeps the
-  existing `previous.json`, so the page always compares against the last
-  earlier day. A failed fetch changes neither file.
+  [`site/data/previous.json`](site/data/previous.json), but only if the new
+  data's last price date is later than the existing file's, so the page
+  always compares against the edition of the last earlier price day. A run
+  that brings no new price date keeps the existing `previous.json`: on a
+  TEFAS holiday that falls on a weekday, the update still runs and publishes
+  any revised returns, but the summary keeps showing the last trading day's
+  changes until the next trading day. The same goes for a second run on the
+  same day, unless it brings a newer price date (TEFAS was late at the first
+  run). An existing file without valid price dates is kept only if it was
+  fetched on an earlier Istanbul day. A failed fetch changes neither file.
 - After the table is on screen, the page loads `previous.json` and checks
   both files' funds with the same rules (and each file's own Sharpe ratios
   and risk-free return), in [`site/changes.js`](site/changes.js). A fund
@@ -250,15 +258,21 @@ The button is disabled until the data has loaded, and while no fund matches.
   [Fund size](#fund-size); a missing or invalid size never fails the
   update). It writes both to
   [`site/data/funds.json`](site/data/funds.json), after keeping an earlier
-  day's file as `site/data/previous.json` (see
+  price day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
   only the Python standard library and refuses to overwrite the file if a
   response looks wrong: a TEFAS error, a missing or incomplete row, fewer
   than 200 funds, a fund list under 90% as long as the existing file's, more
   than 40% of funds without a 1M, 3M, 6M or 1Y return (missing or exactly 0,
-  which would mean TEFAS sent an empty column), or prices for too few dates
-  or funds or a price list that may be cut off. The limits are constants at
-  the top of the script.
+  which would mean TEFAS sent an empty column), prices for too few dates
+  or funds or a price list that may be cut off, or a price window that
+  suggests one of its requests came back empty: two consecutive price dates
+  more than 14 days apart, a last price date more than 14 days before the
+  Istanbul fetch day, or a last price date earlier than the existing file's
+  (an equal one, on a holiday or a second run, is fine), or one that came
+  back only partly: a price date with prices for under 80% of the funds
+  priced anywhere in the window (every date in the committed editions had at
+  least 95%). The limits are constants at the top of the script.
 - [`.github/workflows/update.yml`](.github/workflows/update.yml) runs the
   script, commits the new data file and `previous.json` together (giving a
   history of every update; `previous.json` is the same content as an earlier
@@ -273,20 +287,37 @@ The button is disabled until the data has loaded, and while no fund matches.
   after the commit most likely failed: the fallback then republishes the
   committed data, without fetching or committing, through the same choice of
   tested code as any data run, and says so in the run's summary and a
-  warning.
+  warning. GitHub sometimes starts the fallback after midnight Istanbul time;
+  such a run still checks the day it was scheduled for (a run that starts
+  before 12:37 belongs to the previous day), so it doesn't replace that day's
+  edition with a copy of the same prices.
   [`scripts/fallback_action.py`](scripts/fallback_action.py) makes that
   decision. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
   owner (see [Daily trigger](#daily-trigger-cron-joborg)). Pushes to `main`
-  redeploy the site without fetching, after its `tests` job (the two jobs from
-  `test.yml`) passes. You can also run it by hand from the Actions tab
+  redeploy the site without fetching, after its `tests` job (the three jobs
+  from `test.yml`) passes. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
-- [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`
-  and the page tests (`npm run test:e2e`, see
-  [Local development](#local-development)) as two jobs on every pull request
-  and on every push to `main`, with read-only access to the repository.
-  `update.yml` runs the same two jobs on a push to `main` and deploys only
-  after both pass, so a code change that breaks a test doesn't go live.
+- [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`,
+  the page tests (`npm run test:e2e`, see
+  [Local development](#local-development)) and a `lint` job as three jobs on
+  every pull request and on every push to `main`, with read-only access to
+  the repository. The `lint` job runs
+  [actionlint](https://github.com/rhysd/actionlint) 1.7.12, with shellcheck
+  on every `run:` block, over both workflows, so a mistake in a step that only
+  data runs reach (a misspelt step id in an `if:`, a broken shell script)
+  fails the PR instead of the next daily run. Run the same check locally
+  with Docker (it isn't part of `npm test`):
+
+  ```sh
+  docker run --rm -v "$PWD":/repo --workdir /repo rhysd/actionlint:1.7.12
+  ```
+
+  Dependabot doesn't update that image, so its version is bumped by hand in
+  `test.yml` and here.
+  `update.yml` runs the same three jobs on a push to `main` and deploys only
+  after all pass, so a code change that breaks a test or the lint doesn't go
+  live.
   Data runs (the 10:15 trigger, the fallback schedule and manual runs) don't
   run the tests, so they never hold back the daily update, but they don't
   deploy untested code either.
@@ -433,7 +464,10 @@ restored from the URL, with unknown values ignored; that the banner's price date
 `coverage.js` works out from the data, don't change with the view, filters or
 search, say `Price dates unknown` without errors when `priceDates` is missing
 or malformed, and fit a 320 px screen; that the stale data
-warning appears only when the data is old; that a failed data request
+warning appears only when the data is old, and that the warning names both
+dates when the last price date is two or more weekdays before the update (but
+not one), fits a 390 px screen and follows the stale warning when both apply;
+that a failed data request
 shows an error; and that the changes summary and the `NEW` / `LEFT` badges
 match what `changes.js` works out from a `previous.json` fixture with known
 changes (and from the committed one), fit a 320 px screen, and are left out
@@ -468,7 +502,8 @@ Show all button and with every row), the Passing view and the All view with
 the Show all button at 320 px, the Passing and Excluded views at 390 px
 (in the phone column order), a search that
 matches nothing, filters and a search that leave no fund (with the button that
-clears them), stale data and a failed data request; and it tabs through
+clears them), stale data, prices that lag the update and a failed data
+request; and it tabs through
 every control on the page, with rows, with the Show all button and with the
 clear button showing, and
 checks that each one gets a focus outline with at least 3:1 contrast against

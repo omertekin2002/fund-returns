@@ -12,23 +12,39 @@ Usage: python3 scripts/fetch_funds.py [output_path]
 
 Uses only the Python standard library so the workflow needs no install step.
 The output file is only replaced after the response passes validation.
+Among other checks, the price window is refused when it looks like one of its
+TEFAS requests came back empty (a hole of more than two weeks between price
+dates, a stale last date, or one earlier than the existing file's) or only
+partly (a price date with prices for under 80% of the funds priced in the
+window).
+
+A NaN or infinite return or price from TEFAS (a JSON token, or a string such
+as "NaN" or "Infinity") counts as missing, like an empty value: the browser's
+JSON.parse can't read those values, so a single one would stop the page
+loading. The output is written and checked as strict JSON, so the run fails
+before writing anything if a non-finite value ever gets through.
 
 Before replacing it, the script keeps the existing file's content as
 previous.json next to it, so the website can show which funds entered or left
-the passing list since the last update. It does this only when the existing
-file is from an earlier Istanbul day, so a second run on the same day still
-compares against the last earlier day.
+the passing list since the last update. It does this only when the new data's
+last price date is later than the existing file's, so previous.json is always
+the edition of the last earlier price day. A run that brings no new price date
+(a TEFAS holiday on a weekday, or a second run on the same day) keeps the
+existing previous.json, so the page still shows that trading day's changes.
+An existing file without valid price dates is kept only when it was fetched on
+an earlier Istanbul day.
 """
 
 import http.client
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 API_URL = "https://www.tefas.gov.tr/api/funds/fonGetiriBazliBilgiGetir"
@@ -73,6 +89,19 @@ MAX_PRICE_ROWS = 100000
 # 26 weeks hold ~125 business days; the public holidays in them remove up to
 # ~15, so far fewer means a response is broken.
 MIN_PRICE_DATES = 100
+# The window is many requests, and TEFAS may answer one with an empty list and
+# no error, leaving a hole of about a month (or a stale end) that the count
+# above doesn't catch. In the 42 editions with prices up to 2026-11-27,
+# consecutive price dates were never more than 6 days apart, and the last one
+# was never more than 1 day before the Istanbul fetch day. The longest market
+# closure, a 9-day bayram holiday with its weekends, leaves a 10-day gap.
+MAX_PRICE_GAP_DAYS = 14
+# A request may also come back partly, with rows for only some of the funds,
+# leaving them without about a month of prices. In the same 42 editions, every
+# price date had prices for at least 95.0% of the funds priced anywhere in the
+# window (the lowest were early dates, before some funds launched, and the
+# fetch day itself: 1,021 of 1,074 on 2026-11-13).
+MIN_DATE_COVERAGE_PERCENT = 80
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 HEADERS = {
@@ -161,15 +190,23 @@ def fetch_json(url, payload, referer):
 
 
 def to_number(value):
+    """value as a finite float, or None if it is missing, empty or not finite.
+
+    TEFAS may send NaN or Infinity as a JSON token or as a string ("NaN",
+    "Infinity", "-Infinity"); they count as missing, like an empty value.
+    """
     if value is None or value == "":
         return None
-    return float(value)
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def to_risk(value):
+    """value as an int, or None if it isn't a whole number or is infinite."""
     try:
         return int(value)
-    except (TypeError, ValueError):
+    # int() raises OverflowError for an infinite float.
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -250,21 +287,33 @@ def check_returns(funds):
             )
 
 
-def check_fund_count(funds, output):
-    """Raise ValueError if funds is much shorter than the existing output's list.
+def read_output(output):
+    """The existing output file's data as a dict, or None.
 
-    A missing, unreadable or invalid output file, or one without a funds list,
-    skips the check.
+    A missing, unreadable or invalid file, or one that isn't a JSON object,
+    gives None, so the checks that compare against it are skipped.
     """
     try:
         with open(output, encoding="utf-8") as handle:
             data = json.load(handle)
-        old_count = len(data["funds"]) if isinstance(data["funds"], list) else None
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def check_fund_count(funds, existing):
+    """Raise ValueError if funds is much shorter than the existing data's list.
+
+    existing is the existing output file's data (see read_output). None, or
+    data without a funds list, skips the check.
+    """
+    old_funds = existing.get("funds") if existing else None
+    if not isinstance(old_funds, list):
         return
-    if old_count is None or len(funds) * 100 >= MIN_KEPT_FUNDS_PERCENT * old_count:
+    old_count = len(old_funds)
+    if len(funds) * 100 >= MIN_KEPT_FUNDS_PERCENT * old_count:
         return
-    old_fetched_at = data.get("fetchedAt")
+    old_fetched_at = existing.get("fetchedAt")
     since = (
         f"the data fetched at {old_fetched_at}"
         if isinstance(old_fetched_at, str)
@@ -274,6 +323,61 @@ def check_fund_count(funds, output):
         f"Only {len(funds):,} funds returned, down from {old_count:,} in {since} "
         f"(expected at least {MIN_KEPT_FUNDS_PERCENT}%)"
     )
+
+
+def check_price_dates(dates, today, existing):
+    """Raise ValueError if the price window looks like a request came back empty.
+
+    dates are the window's price dates ("YYYY-MM-DD", sorted), today is the
+    Istanbul fetch day, and existing is the existing output file's data (see
+    read_output). The window is refused when two consecutive dates, or its last
+    date and today, are more than MAX_PRICE_GAP_DAYS apart, or when its last
+    date is earlier than the existing data's. Existing data without a valid
+    last price date skips that last check; an equal date (a holiday, or a
+    second run) passes.
+    """
+    days = [date.fromisoformat(day) for day in dates]
+    for earlier, later in zip(days, days[1:]):
+        gap = (later - earlier).days
+        if gap > MAX_PRICE_GAP_DAYS:
+            raise ValueError(
+                f"Price dates jump from {earlier} to {later} ({gap} days; at most "
+                f"{MAX_PRICE_GAP_DAYS} expected); a TEFAS price request may have "
+                "come back empty"
+            )
+    age = (today - days[-1]).days
+    if age > MAX_PRICE_GAP_DAYS:
+        raise ValueError(
+            f"The last price date {days[-1]} is {age} days before {today} (at most "
+            f"{MAX_PRICE_GAP_DAYS} expected); the last TEFAS price request may have "
+            "come back empty"
+        )
+    old_last = last_price_date(existing) if existing else None
+    if old_last and dates[-1] < old_last:
+        raise ValueError(
+            f"The last price date {dates[-1]} is earlier than {old_last} in the "
+            "existing data; a TEFAS price request may have come back empty"
+        )
+
+
+def check_price_coverage(dates, prices):
+    """Raise ValueError if a price date has prices for few of the window's funds.
+
+    dates are the window's price dates and prices maps each fund code to its
+    price (or None) on each date, as parse_prices returns them. The window is
+    refused when any date has a price for fewer than MIN_DATE_COVERAGE_PERCENT%
+    of the funds that have a price on any date, which suggests a TEFAS price
+    request came back only partly.
+    """
+    priced = [fund_prices for fund_prices in prices.values() if any(fund_prices)]
+    for index, day in enumerate(dates):
+        count = sum(1 for fund_prices in priced if fund_prices[index])
+        if count * 100 < MIN_DATE_COVERAGE_PERCENT * len(priced):
+            raise ValueError(
+                f"Prices on {day} for only {count:,} of the {len(priced):,} funds "
+                f"priced in the window (expected at least {MIN_DATE_COVERAGE_PERCENT}%); "
+                "a TEFAS price request may have come back only partly"
+            )
 
 
 def price_ranges(start, end):
@@ -364,7 +468,30 @@ def parse_sizes(responses, codes):
     return {code: latest[code][1] if code in latest else None for code in codes}
 
 
+def strict_json(value):
+    """value as JSON text, raising ValueError for NaN or Infinity anywhere in it.
+
+    Python's json.dumps writes those as bare NaN / Infinity by default, which
+    the browser's JSON.parse rejects.
+    """
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def reject_constant(name):
+    raise ValueError(f"{name} is not valid JSON")
+
+
+def parse_strict(text):
+    """Parse text as JSON the way the browser's JSON.parse does.
+
+    Python's json.loads accepts NaN, Infinity and -Infinity; this raises
+    ValueError for them.
+    """
+    return json.loads(text, parse_constant=reject_constant)
+
+
 def render(funds, fetched_at, price_dates):
+    """The output file's text. Raises ValueError for a NaN or infinite value."""
     header = {
         "fetchedAt": fetched_at,
         "source": PAGE_URL,
@@ -374,14 +501,22 @@ def render(funds, fetched_at, price_dates):
         "priceDates": price_dates,
     }
     header_lines = "".join(
-        f"  {json.dumps(key)}: {json.dumps(value, ensure_ascii=False)},\n"
+        f"  {json.dumps(key)}: {strict_json(value)},\n"
         for key, value in header.items()
     )
     # One fund per line keeps the daily git diffs readable.
-    fund_lines = ",\n".join(
-        "    " + json.dumps(fund, ensure_ascii=False) for fund in funds
-    )
+    fund_lines = ",\n".join("    " + render_fund(fund) for fund in funds)
     return "{\n" + header_lines + '  "funds": [\n' + fund_lines + "\n  ]\n}\n"
+
+
+def render_fund(fund):
+    try:
+        return strict_json(fund)
+    except ValueError as exc:
+        raise ValueError(
+            f"Fund {fund.get('code')} has a NaN or infinite value, which the page "
+            f"can't read: {exc}"
+        ) from exc
 
 
 def write_atomically(path, text):
@@ -403,12 +538,38 @@ def istanbul_date(iso):
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ISTANBUL).date()
 
 
-def rotate_previous(output, previous, fetched_at):
-    """Copy the existing output file to previous if it is from an earlier day.
+def valid_price_date(value):
+    """value if it is a "YYYY-MM-DD" date string, otherwise None."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return None
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value
+
+
+def last_price_date(data):
+    """The last of data's priceDates if it is a valid date, otherwise None."""
+    dates = data.get("priceDates")
+    if not isinstance(dates, list) or not dates:
+        return None
+    return valid_price_date(dates[-1])
+
+
+def rotate_previous(output, previous, fetched_at, new_last_price_date):
+    """Copy the existing output file to previous if the new data is newer.
+
+    The new data is newer when its last price date (new_last_price_date) is
+    later than the existing file's. On a TEFAS holiday, or a second run that
+    brings no new price date, previous keeps the edition of the last earlier
+    price day. If either file has no valid last price date, the existing file
+    is copied only when it was fetched on an earlier Istanbul day than
+    fetched_at.
 
     Returns True if previous was written. A missing, unreadable or invalid
-    output file, or one from the same Istanbul day as fetched_at, leaves
-    previous as it is. Never raises: the new data must still be written.
+    output file leaves previous as it is. Never raises: the new data must still
+    be written.
     """
     try:
         with open(output, encoding="utf-8") as handle:
@@ -425,7 +586,16 @@ def rotate_previous(output, previous, fetched_at):
         old_fetched_at = data.get("fetchedAt")
         if not isinstance(old_fetched_at, str):
             raise ValueError("it has no fetchedAt")
-        if istanbul_date(old_fetched_at) >= istanbul_date(fetched_at):
+        old_last = last_price_date(data)
+        new_last = valid_price_date(new_last_price_date)
+        if old_last and new_last:
+            if new_last <= old_last:
+                print(
+                    f"Keeping {os.path.normpath(previous)}: "
+                    f"no new price date since {old_last}"
+                )
+                return False
+        elif istanbul_date(old_fetched_at) >= istanbul_date(fetched_at):
             print(f"Keeping {os.path.normpath(previous)}: the data was already fetched today")
             return False
         # The same text as the old file, so git stores it only once.
@@ -442,14 +612,17 @@ def main():
     output = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_OUTPUT
     previous = os.path.join(os.path.dirname(output), "previous.json")
     now = datetime.now(timezone.utc).replace(microsecond=0)
+    existing = read_output(output)
     funds = parse(fetch_json(API_URL, PAYLOAD, PAGE_URL))
-    check_fund_count(funds, output)
+    check_fund_count(funds, existing)
 
     end = now.astimezone(ISTANBUL).date()
     start = end - timedelta(days=PRICE_WINDOW_DAYS)
     codes = [fund["code"] for fund in funds]
     price_responses = fetch_prices(start, end)
     price_dates, prices = parse_prices(price_responses, codes)
+    check_price_dates(price_dates, end, existing)
+    check_price_coverage(price_dates, prices)
     sizes = parse_sizes(price_responses, set(codes))
     for fund in funds:
         fund["size"] = sizes[fund["code"]]
@@ -457,8 +630,10 @@ def main():
 
     fetched_at = now.isoformat().replace("+00:00", "Z")
     text = render(funds, fetched_at, price_dates)
-    json.loads(text)  # sanity check that the hand-assembled JSON is valid
-    rotate_previous(output, previous, fetched_at)
+    # Sanity check that the hand-assembled JSON is valid, as strictly as the
+    # browser reads it.
+    parse_strict(text)
+    rotate_previous(output, previous, fetched_at, price_dates[-1])
     write_atomically(output, text)
     sized = sum(1 for fund in funds if fund["size"] is not None)
     print(

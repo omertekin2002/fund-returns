@@ -1,9 +1,10 @@
 name: Tests
 
-# Runs `npm test` (the filter, Sharpe ratio and fetch script tests) and
-# `npm run test:e2e` (the page in headless Chromium) on every pull request and
-# on pushes to main. update.yml also calls it on pushes to main, so that a code
-# change is deployed only after both jobs pass. It only reads the repository.
+# Runs `npm test` (the filter, Sharpe ratio and fetch script tests),
+# `npm run test:e2e` (the page in headless Chromium) and actionlint over the
+# workflows on every pull request and on pushes to main. update.yml also calls
+# it on pushes to main, so that a code change is deployed only after all three
+# jobs pass. It only reads the repository.
 on:
   pull_request:
   push:
@@ -44,3 +45,19 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+
+  # Checks both workflows with actionlint, which also runs shellcheck on every
+  # `run:` block. Most of update.yml's data-run steps run only on schedule and
+  # workflow_dispatch, which no PR exercises, so a typo in an `if:` expression
+  # or a shell script would otherwise first show up at the next daily run.
+  # The image bundles shellcheck. Dependabot doesn't update `docker://`
+  # references, so the version is bumped by hand; run the same check locally
+  # with the command in the README.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color

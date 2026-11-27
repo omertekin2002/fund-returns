@@ -5,8 +5,8 @@ The 10:15 cron-job.org run commits today's site/data/ in its build job and
 publishes it in a separate deploy job. The scheduled fallback has three
 outcomes:
 
-- `fetch`: the repo has no edition for today (Istanbul time). Fetch from
-  TEFAS, commit and deploy, as a 10:15 run does.
+- `fetch`: the repo has no edition for today (Istanbul time, but see
+  "Today" below). Fetch from TEFAS, commit and deploy, as a 10:15 run does.
 - `skip`: the repo has today's edition and the live site serves the same one.
 - `recover`: the repo has today's edition but the live site serves another
   (older) one, or couldn't be read. The deploy after the commit must have
@@ -24,9 +24,14 @@ missing or empty file, when fetching it failed. The script prints
 (empty when unreadable) and `reason=<one line>` for $GITHUB_OUTPUT. It only
 decides; the workflow fetches, commits and deploys.
 
-"Today" is the Istanbul calendar date of the current time, as the fallback
-has always used: a run that GitHub starts after midnight Istanbul fetches
-when the committed edition is the previous day's.
+"Today" is the day whose schedule the run belongs to, by the same rule as
+scripts/check_trigger.py (`trigger_day`): GitHub often starts the fallback
+hours late, sometimes after midnight Istanbul time, and a run that starts
+before 12:37 Istanbul belongs to the previous day. So a run that starts at
+00:38 Tuesday still checks Monday: it skips (or recovers) when Monday's
+edition is committed, and fetches only when the repo has no edition from
+Monday or later. Fetching again then would only replace Monday's edition with
+a copy of the same price day and make Monday's edition `previous.json`.
 
 Uses only the Python standard library so the workflow needs no install step.
 """
@@ -35,7 +40,16 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# check_trigger.py sits next to this script; make it importable however this
+# file is loaded (`python3 scripts/fallback_action.py` or a test's importlib).
+SCRIPTS = str(Path(__file__).resolve().parent)
+if SCRIPTS not in sys.path:
+    sys.path.insert(0, SCRIPTS)
+
+from check_trigger import trigger_day  # noqa: E402
 
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
@@ -63,14 +77,18 @@ def decide(committed, live, now):
     """Return (action, reason).
 
     committed, live: the fetchedAt datetimes of the committed and the live
-    funds.json, or None when unreadable. now: the current time.
+    funds.json, or None when unreadable. now: the current time; the run
+    checks the day check_trigger.trigger_day(now) gives.
     """
-    today = now.astimezone(ISTANBUL).date()
+    today = trigger_day(now)
     if committed is None:
         return "fetch", "the committed funds.json has no readable fetchedAt"
     committed_day = committed.astimezone(ISTANBUL).date()
-    if committed_day != today:
-        return "fetch", f"the committed edition is from {committed_day}, not today ({today})"
+    if committed_day < today:
+        return "fetch", (
+            f"the committed edition is from {committed_day}, older than "
+            f"{today}, the day this run checks"
+        )
     if live is None:
         return "recover", (
             "today's edition is committed, but the live data/funds.json "

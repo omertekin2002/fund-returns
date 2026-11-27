@@ -6,7 +6,10 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -31,6 +34,33 @@ small_limits = mock.patch.multiple(
 
 CODES = ["AAA", "BBB", "CCC"]
 DATES = ["2026-09-30", "2026-10-01", "2026-10-02"]
+
+# The non-finite values TEFAS could send: Python's json.loads turns the JSON
+# tokens NaN, Infinity and -Infinity into floats, and .NET serializers write
+# them as strings.
+NON_FINITE = [
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "nan",
+    "inf",
+    "1e400",
+]
+NODE = shutil.which("node")
+REPO = SCRIPT.parent.parent
+
+
+def node_parses(text):
+    """Whether Node's JSON.parse accepts text, as the page's fetch().json() does."""
+    result = subprocess.run(
+        [NODE, "-e", 'JSON.parse(require("fs").readFileSync(0, "utf8"))'],
+        input=text.encode("utf-8"),
+        capture_output=True,
+    )
+    return result.returncode == 0
 
 
 def fund_row(code, **fields):
@@ -119,8 +149,30 @@ class ParseTest(unittest.TestCase):
         self.assertIsNone(returns["5y"])
         self.assertEqual(returns["1m"], 3.5)
 
+    def test_non_finite_returns_become_none(self):
+        for value in NON_FINITE:
+            with self.subTest(value=value):
+                raw = funds_response()
+                raw["resultList"][0].update(getiri1a=value, getiri6a=value, getiri5y=value)
+                returns = fetch_funds.parse(raw)[0]["returns"]
+                self.assertIsNone(returns["1m"])
+                self.assertIsNone(returns["6m"])
+                self.assertIsNone(returns["5y"])
+                self.assertEqual(returns["3m"], 9.5)
+
+    def test_non_finite_json_tokens_become_none(self):
+        # What json.loads makes of a body with bare NaN / Infinity tokens.
+        body = json.dumps(funds_response()).replace('"getiri3a": 9.5', '"getiri3a": NaN', 1)
+        body = body.replace('"getiri1y": 45', '"getiri1y": -Infinity', 1)
+        body = body.replace('"getiriyb": 30.1', '"getiriyb": Infinity', 1)
+        returns = fetch_funds.parse(json.loads(body))[0]["returns"]
+        self.assertEqual(
+            returns,
+            {"1m": 3.5, "3m": None, "6m": 20.25, "1y": None, "ytd": None, "3y": 210.4, "5y": 400.0},
+        )
+
     def test_bad_risk_becomes_none(self):
-        for risk in [None, "", "yüksek", [6]]:
+        for risk in [None, "", "yüksek", [6], *NON_FINITE]:
             with self.subTest(risk=risk):
                 raw = funds_response()
                 raw["resultList"][0]["riskDegeri"] = risk
@@ -212,6 +264,21 @@ class CheckReturnsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"^{label} return missing or 0 for 3 of 5"):
                     fetch_funds.parse(raw)
 
+    def test_rejects_a_non_finite_rule_column(self):
+        for field, label in self.RULE_FIELDS.items():
+            with self.subTest(field=field):
+                # 2 of 5 is 40%: accepted, with the non-finite values as None.
+                raw = with_returns(self.FIVE, field, ["NaN", float("inf"), 1.5, 2.5, -3])
+                funds = fetch_funds.parse(raw)
+                self.assertEqual(
+                    [fund["returns"][fetch_funds.RETURN_FIELDS[field]] for fund in funds],
+                    [None, None, 1.5, 2.5, -3.0],
+                )
+                # 3 of 5 is 60%: refused like an empty column.
+                raw = with_returns(self.FIVE, field, ["NaN", float("inf"), "-Infinity", 2.5, -3])
+                with self.assertRaisesRegex(ValueError, f"^{label} return missing or 0 for 3 of 5"):
+                    fetch_funds.parse(raw)
+
     def test_a_negative_return_is_not_missing(self):
         raw = with_returns(CODES, "getiri1a", [-0.5, -12, "-3.25"])
         self.assertEqual(len(fetch_funds.parse(raw)), 3)
@@ -267,6 +334,17 @@ class ParsePricesTest(unittest.TestCase):
         self.assertEqual(prices["AAA"], [None, 2.25, 1.5])
         self.assertEqual(prices["BBB"], [None, 1.5, 1.5])
         self.assertEqual(prices["CCC"], [None, 1.5, 1.5])
+
+    def test_non_finite_price_becomes_none(self):
+        for value in NON_FINITE:
+            with self.subTest(value=value):
+                raw = prices_response()
+                # AAA's price on the first date; the others still have one.
+                raw["resultList"][0]["fiyat"] = value
+                dates, prices = parse_prices(raw, CODES)
+                self.assertEqual(dates, DATES)
+                self.assertEqual(prices["AAA"], [None, 1.5, 1.5])
+                self.assertEqual(prices["BBB"], [1.5, 1.5, 1.5])
 
     def test_ignores_codes_not_in_the_fund_list(self):
         raw = prices_response(CODES + ["ZZZ"])
@@ -593,6 +671,50 @@ class RenderTest(unittest.TestCase):
         self.assertIn("Para Piyasası Şemsiye Fonu", text)
         self.assertNotIn("\\u", text)
 
+    def test_output_parses_strictly(self):
+        self.assertEqual(fetch_funds.parse_strict(self.render())["funds"], self.funds)
+
+    def test_refuses_a_non_finite_value(self):
+        for value in [float("nan"), float("inf"), float("-inf")]:
+            for path in [("returns", "6m"), ("prices", 1), ("size",)]:
+                with self.subTest(value=value, path=path):
+                    funds = json.loads(json.dumps(self.funds))
+                    target = funds[1]
+                    for key in path[:-1]:
+                        target = target[key]
+                    target[path[-1]] = value
+                    with self.assertRaisesRegex(
+                        ValueError, "^Fund BBB has a NaN or infinite value, which the page can't read"
+                    ):
+                        fetch_funds.render(funds, "2026-10-20T07:15:33Z", DATES)
+
+    def test_rerenders_the_committed_editions_unchanged(self):
+        for name in ["funds.json", "previous.json"]:
+            path = REPO / "site" / "data" / name
+            if not path.exists():
+                continue
+            with self.subTest(name=name):
+                text = path.read_text(encoding="utf-8")
+                data = fetch_funds.parse_strict(text)
+                self.assertEqual(
+                    fetch_funds.render(data["funds"], data["fetchedAt"], data["priceDates"]),
+                    text,
+                )
+
+
+class ParseStrictTest(unittest.TestCase):
+    def test_parses_json(self):
+        self.assertEqual(
+            fetch_funds.parse_strict('{"a": [1.5, null, -2, "NaN"]}'),
+            {"a": [1.5, None, -2, "NaN"]},
+        )
+
+    def test_refuses_nan_and_infinity(self):
+        for token in ["NaN", "Infinity", "-Infinity"]:
+            with self.subTest(token=token):
+                with self.assertRaisesRegex(ValueError, f"^{token} is not valid JSON$"):
+                    fetch_funds.parse_strict(f'{{"a": [1, {token}]}}')
+
 
 class WriteAtomicallyTest(unittest.TestCase):
     def setUp(self):
@@ -709,14 +831,20 @@ class FetchJsonTest(unittest.TestCase):
         self.assertIn(f"Attempt {attempts}/{attempts} failed", self.stderr.getvalue())
 
 
-def data_file(fetched_at, codes=("AAA",)):
+# Price dates that end the day before DATES, so data fetched from the mocks
+# (which end on DATES[-1]) has a newer last price date.
+EARLIER_DATES = ["2026-09-29", "2026-09-30", "2026-10-01"]
+
+
+def data_file(fetched_at, codes=("AAA",), price_dates=EARLIER_DATES):
     """The text of a funds.json fetched at fetched_at."""
     funds = [{"code": code, "returns": {}, "prices": []} for code in codes]
-    return fetch_funds.render(funds, fetched_at, DATES)
+    return fetch_funds.render(funds, fetched_at, price_dates)
 
 
 class RotatePreviousTest(unittest.TestCase):
     NOW = "2026-10-28T07:15:00Z"  # 10:15 on 28 Oct in Istanbul
+    NEW_LAST = DATES[-1]  # the new data's last price date
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -726,18 +854,18 @@ class RotatePreviousTest(unittest.TestCase):
         self.previous = self.directory / "previous.json"
         stdout = mock.patch("sys.stdout", new_callable=io.StringIO)
         stderr = mock.patch("sys.stderr", new_callable=io.StringIO)
-        stdout.start()
+        self.stdout = stdout.start()
         self.stderr = stderr.start()
         self.addCleanup(stdout.stop)
         self.addCleanup(stderr.stop)
 
-    def rotate(self):
-        return fetch_funds.rotate_previous(str(self.output), str(self.previous), self.NOW)
+    def rotate(self, new_last=NEW_LAST, now=NOW):
+        return fetch_funds.rotate_previous(str(self.output), str(self.previous), now, new_last)
 
     def files(self):
         return sorted(os.listdir(self.directory))
 
-    def test_keeps_data_from_an_earlier_day(self):
+    def test_keeps_data_from_an_earlier_price_day(self):
         old = data_file("2026-10-27T07:15:00Z")
         self.output.write_text(old, encoding="utf-8")
         self.previous.write_text(data_file("2026-10-24T07:15:00Z"), encoding="utf-8")
@@ -746,22 +874,107 @@ class RotatePreviousTest(unittest.TestCase):
         self.assertEqual(self.output.read_text(encoding="utf-8"), old)
         self.assertEqual(self.files(), ["funds.json", "previous.json"])
 
+    def test_a_holiday_without_a_new_price_date_leaves_previous_alone(self):
+        # Fetched on an earlier day, but with the same last price date.
+        kept = data_file("2026-10-26T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        self.assertIn(
+            f"Keeping {os.path.normpath(self.previous)}: no new price date since 2026-10-02",
+            self.stdout.getvalue(),
+        )
+
+    def test_an_earlier_new_price_date_leaves_previous_alone(self):
+        kept = data_file("2026-10-26T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate(new_last="2026-10-01"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+
+    def test_a_holiday_without_previous_writes_none(self):
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.files(), ["funds.json"])
+
+    def test_leaves_previous_alone_on_the_same_day_with_the_same_price_date(self):
+        kept = data_file("2026-10-27T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-28T07:16:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+
+    def test_rotates_on_the_same_day_with_a_newer_price_date(self):
+        # TEFAS was late at 10:15, and a later run that day brings the new date.
+        old = data_file("2026-10-28T07:15:00Z")
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(data_file("2026-10-27T07:15:00Z"), encoding="utf-8")
+        self.assertTrue(self.rotate(now="2026-10-28T09:37:00Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+
+    def test_replays_the_republic_day_holiday(self):
+        # The editions of 27 and 28 Oct 2026, then the 29 Oct holiday, when
+        # TEFAS still had 28 Oct as its last price date.
+        edition_27 = data_file("2026-10-27T07:15:33Z", ["OLD"], ["2026-10-24", "2026-10-27"])
+        edition_28 = data_file("2026-10-28T07:15:33Z", ["NEW"], ["2026-10-27", "2026-10-28"])
+        self.previous.write_text(edition_27, encoding="utf-8")
+        self.output.write_text(edition_28, encoding="utf-8")
+        self.assertFalse(self.rotate(new_last="2026-10-28", now="2026-10-29T07:15:37Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), edition_27)
+        # The holiday's edition replaces funds.json; the next trading day rotates it.
+        edition_29 = data_file("2026-10-29T07:15:37Z", ["NEW"], ["2026-10-27", "2026-10-28"])
+        self.output.write_text(edition_29, encoding="utf-8")
+        self.assertTrue(self.rotate(new_last="2026-10-30", now="2026-10-30T07:15:30Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), edition_29)
+
+    def test_without_valid_price_dates_compares_istanbul_days(self):
+        def old_file(fetched_at, **fields):
+            return json.dumps({"fetchedAt": fetched_at, **fields, "funds": []})
+
+        for label, fields in [
+            ("no priceDates", {}),
+            ("empty list", {"priceDates": []}),
+            ("not a list", {"priceDates": "2026-10-02"}),
+            ("non-string last entry", {"priceDates": ["2026-10-01", 20261002]}),
+            ("null last entry", {"priceDates": ["2026-10-01", None]}),
+            ("not a date", {"priceDates": ["2026-10-01", "yesterday"]}),
+            ("invalid date", {"priceDates": ["2026-10-01", "2026-13-01"]}),
+            ("other format", {"priceDates": ["2026-10-01", "20261002"]}),
+        ]:
+            with self.subTest(label):
+                self.previous.unlink(missing_ok=True)
+                # The same Istanbul day: kept as it is.
+                self.output.write_text(old_file("2026-10-28T06:00:00Z", **fields), encoding="utf-8")
+                self.assertFalse(self.rotate())
+                self.assertFalse(self.previous.exists())
+                # An earlier Istanbul day: copied.
+                old = old_file("2026-10-27T07:15:00Z", **fields)
+                self.output.write_text(old, encoding="utf-8")
+                self.assertTrue(self.rotate())
+                self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+
+    def test_without_a_valid_new_price_date_compares_istanbul_days(self):
+        for new_last in [None, "", "yesterday", 20261002]:
+            with self.subTest(new_last=new_last):
+                self.previous.unlink(missing_ok=True)
+                self.output.write_text(data_file("2026-10-28T06:00:00Z"), encoding="utf-8")
+                self.assertFalse(self.rotate(new_last=new_last))
+                self.assertFalse(self.previous.exists())
+                self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+                self.assertTrue(self.rotate(new_last=new_last))
+                self.assertTrue(self.previous.exists())
+
     def test_compares_istanbul_dates(self):
+        # Without price dates, only the fetch day decides.
         # 23:30 UTC on 27 Oct is already 02:30 on 28 Oct in Istanbul.
-        self.output.write_text(data_file("2026-10-27T23:30:00Z"), encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T23:30:00Z", price_dates=[]), encoding="utf-8")
         self.assertFalse(self.rotate())
         self.assertFalse(self.previous.exists())
         # 20:59 UTC on 27 Oct is still 23:59 on 27 Oct in Istanbul.
-        self.output.write_text(data_file("2026-10-27T20:59:00Z"), encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T20:59:00Z", price_dates=[]), encoding="utf-8")
         self.assertTrue(self.rotate())
         self.assertTrue(self.previous.exists())
-
-    def test_leaves_previous_alone_when_the_data_is_from_the_same_day(self):
-        kept = data_file("2026-10-27T07:15:00Z")
-        self.previous.write_text(kept, encoding="utf-8")
-        self.output.write_text(data_file("2026-10-28T07:16:00Z"), encoding="utf-8")
-        self.assertFalse(self.rotate())
-        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
 
     def test_missing_output_writes_no_previous(self):
         self.assertFalse(self.rotate())
@@ -811,7 +1024,8 @@ class CheckFundCountTest(unittest.TestCase):
         self.output.write_text(data_file(fetched_at, codes), encoding="utf-8")
 
     def check(self, count):
-        fetch_funds.check_fund_count(funds_of(count), str(self.output))
+        existing = fetch_funds.read_output(str(self.output))
+        fetch_funds.check_fund_count(funds_of(count), existing)
 
     def test_accepts_90_percent_or_more_of_the_last_list(self):
         self.write_old(10)
@@ -862,10 +1076,202 @@ class CheckFundCountTest(unittest.TestCase):
         self.check(1)
 
 
+def business_days(first, last):
+    """The "YYYY-MM-DD" weekdays from first to last (dates), both included."""
+    days = []
+    while first <= last:
+        if first.weekday() < 5:
+            days.append(first.isoformat())
+        first += timedelta(days=1)
+    return days
+
+
+class ReadOutputTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name) / "funds.json"
+
+    def read(self):
+        return fetch_funds.read_output(str(self.output))
+
+    def test_returns_the_data(self):
+        self.output.write_text(data_file("2026-11-20T07:15:31Z"), encoding="utf-8")
+        self.assertEqual(self.read()["priceDates"], EARLIER_DATES)
+
+    def test_none_for_a_missing_unreadable_or_non_object_file(self):
+        self.assertIsNone(self.read())
+        for text in ["not json", "", "[]", '"funds"', "5", "null"]:
+            with self.subTest(text=text):
+                self.output.write_text(text, encoding="utf-8")
+                self.assertIsNone(self.read())
+        self.output.write_bytes(b"\xff\xfe not utf-8")
+        self.assertIsNone(self.read())
+        self.output.write_text("{}", encoding="utf-8")
+        with mock.patch("builtins.open", side_effect=PermissionError("denied")):
+            self.assertIsNone(self.read())
+
+
+class CheckPriceDatesTest(unittest.TestCase):
+    """check_price_dates() refuses a window with a hole, a stale end or an older end."""
+
+    TODAY = date(2026, 11, 27)  # a Friday
+    # The 2026-11-27 edition's window: 2026-06-01 to 2026-11-27, weekdays
+    # (the real one also skips holidays).
+    WINDOW = business_days(date(2026, 6, 1), date(2026, 11, 27))
+
+    def check(self, dates=None, today=TODAY, existing=None):
+        fetch_funds.check_price_dates(dates or self.WINDOW, today, existing)
+
+    def existing(self, last):
+        return {"fetchedAt": "2026-11-26T07:15:31Z", "funds": [], "priceDates": ["2026-06-01", last]}
+
+    def test_accepts_a_normal_window(self):
+        self.check()
+        self.check(existing=self.existing("2026-11-26"))
+
+    def test_rejects_a_hole_left_by_an_empty_middle_request(self):
+        # The request for 2026-08-22..2026-09-19 came back empty.
+        dates = [day for day in self.WINDOW if not "2026-08-22" <= day <= "2026-09-19"]
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^Price dates jump from 2026-08-21 to 2026-09-21 \(31 days; at most 14 "
+            r"expected\); a TEFAS price request may have come back empty$",
+        ):
+            self.check(dates)
+
+    def test_the_gap_limit_is_more_than_14_days(self):
+        # A 9-day bayram holiday with its weekends: 10 days between price dates.
+        for last_before, first_after, gap in [
+            ("2026-05-22", "2026-06-01", 10),
+            ("2026-05-15", "2026-05-29", 14),
+        ]:
+            with self.subTest(gap=gap):
+                dates = ["2026-05-14", last_before, first_after, *self.WINDOW]
+                self.check(sorted(set(dates)))
+        with self.assertRaisesRegex(ValueError, r"from 2026-05-15 to 2026-05-30 \(15 days"):
+            self.check(["2026-05-15", "2026-05-30", *self.WINDOW])
+
+    def test_rejects_a_stale_end_left_by_an_empty_last_request(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-12"]
+        self.check(dates, today=date(2026, 11, 26))  # 14 days before
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^The last price date 2026-11-12 is 15 days before 2026-11-27 \(at most 14 "
+            r"expected\); the last TEFAS price request may have come back empty$",
+        ):
+            self.check(dates)
+
+    def test_rejects_a_window_that_ends_before_the_existing_one(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-25"]
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^The last price date 2026-11-25 is earlier than 2026-11-26 in the "
+            r"existing data; a TEFAS price request may have come back empty$",
+        ):
+            self.check(dates, existing=self.existing("2026-11-26"))
+
+    def test_an_equal_last_date_is_accepted(self):
+        # A holiday, or a second run on the same day.
+        self.check(existing=self.existing("2026-11-27"))
+
+    def test_existing_data_without_a_valid_last_price_date_skips_that_check(self):
+        dates = [day for day in self.WINDOW if day <= "2026-11-20"]
+        for existing in [
+            None,
+            {},
+            {"funds": []},
+            {"priceDates": None},
+            {"priceDates": []},
+            {"priceDates": "2026-11-26"},
+            {"priceDates": ["2026-11-26", "not a date"]},
+            {"priceDates": ["2026-11-26", 20261126]},
+        ]:
+            with self.subTest(existing=existing):
+                self.check(dates, existing=existing)
+
+
+class CheckPriceCoverageTest(unittest.TestCase):
+    """check_price_coverage() refuses a date that few of the window's funds have prices on."""
+
+    DATES = business_days(date(2026, 6, 1), date(2026, 11, 27))
+    CODES = [f"F{n:04d}" for n in range(1000)]
+
+    def window(self):
+        """Every fund priced on every date."""
+        return {code: [1.5] * len(self.DATES) for code in self.CODES}
+
+    def drop(self, prices, day, count):
+        """Remove the price on day for the first count funds."""
+        index = self.DATES.index(day)
+        for code in self.CODES[:count]:
+            prices[code][index] = None
+        return prices
+
+    def check(self, prices):
+        fetch_funds.check_price_coverage(self.DATES, prices)
+
+    def test_accepts_a_full_window(self):
+        self.check(self.window())
+
+    def test_rejects_a_date_left_partly_priced_by_a_middle_request(self):
+        prices = self.window()
+        # The request for 2026-08-22..2026-09-19 answered for half the funds.
+        for day in self.DATES:
+            if "2026-08-22" <= day <= "2026-09-19":
+                self.drop(prices, day, 500)
+        with self.assertRaisesRegex(
+            ValueError,
+            r"^Prices on 2026-08-24 for only 500 of the 1,000 funds priced in the "
+            r"window \(expected at least 80%\); a TEFAS price request may have come "
+            r"back only partly$",
+        ):
+            self.check(prices)
+
+    def test_rejects_a_partly_priced_last_date(self):
+        prices = self.drop(self.window(), "2026-11-27", 201)
+        with self.assertRaisesRegex(ValueError, r"^Prices on 2026-11-27 for only 799 of the 1,000 funds"):
+            self.check(prices)
+
+    def test_the_limit_is_80_percent(self):
+        self.check(self.drop(self.window(), "2026-09-15", 200))  # 800 of 1,000
+        with self.assertRaisesRegex(ValueError, r"^Prices on 2026-09-15 for only 799 of"):
+            self.check(self.drop(self.window(), "2026-09-15", 201))
+
+    def test_funds_without_any_price_dont_count(self):
+        # 300 funds with no price at all (closed, or not yet launched) leave
+        # the other 700 priced on every date.
+        prices = self.window()
+        for code in self.CODES[:300]:
+            prices[code] = [None] * len(self.DATES)
+        self.check(prices)
+
+    def test_a_fund_launched_late_in_the_window_passes(self):
+        # 150 funds (15%) launched in the window's last month have no prices
+        # before it: the earlier dates still have prices for 85%.
+        prices = self.window()
+        for day in self.DATES:
+            if day < "2026-10-30":
+                self.drop(prices, day, 150)
+        self.check(prices)
+
+    def test_accepts_the_committed_editions(self):
+        for name in ["funds.json", "previous.json"]:
+            path = REPO / "site" / "data" / name
+            if not path.exists():
+                continue
+            with self.subTest(name=name):
+                data = json.loads(path.read_text(encoding="utf-8"))
+                fetch_funds.check_price_coverage(
+                    data["priceDates"], {fund["code"]: fund["prices"] for fund in data["funds"]}
+                )
+
+
 class FixedDatetime(fetch_funds.datetime):
     @classmethod
     def now(cls, tz=None):
-        return cls(2026, 10, 28, 7, 15, 0, 123, tzinfo=tz)
+        # 10:15 on Saturday 3 Oct in Istanbul, the day after DATES[-1].
+        return cls(2026, 10, 3, 7, 15, 0, 123, tzinfo=tz)
 
 
 @small_limits
@@ -895,21 +1301,34 @@ class MainTest(unittest.TestCase):
             fetch_funds.main()
 
     def test_moves_yesterdays_data_to_previous(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
         new = json.loads(self.output.read_text(encoding="utf-8"))
-        self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(new["fetchedAt"], "2026-10-03T07:15:00Z")
         self.assertEqual(codes_of(new["funds"]), CODES)
 
     def test_a_second_run_on_the_same_day_keeps_previous(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
         self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
+
+    def test_a_holiday_run_keeps_previous(self):
+        # The old file ends on the same price date as the mocked prices.
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"], DATES)
+        kept = data_file("2026-10-01T07:15:00Z", ["OLDER"])
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        new = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(new["fetchedAt"], "2026-10-03T07:15:00Z")
+        self.assertEqual(codes_of(new["funds"]), CODES)
+        self.assertIn("no new price date since 2026-10-02", sys.stdout.getvalue())
 
     def test_writes_each_funds_size_from_its_latest_price_date(self):
         prices = prices_response()
@@ -935,8 +1354,8 @@ class MainTest(unittest.TestCase):
         self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
 
     def test_a_failed_or_invalid_fetch_changes_neither_file(self):
-        old = data_file("2026-10-27T07:15:00Z", ["OLD"])
-        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
         for responses in [
             [RuntimeError("Could not fetch data from TEFAS")],
             [funds_response(CODES[:1]), prices_response()],  # too few funds
@@ -953,8 +1372,8 @@ class MainTest(unittest.TestCase):
                 self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
 
     def test_a_much_shorter_fund_list_changes_neither_file(self):
-        old = data_file("2026-10-27T07:15:00Z", ["AAA", "BBB", "CCC", "DDD"])
-        kept = data_file("2026-10-24T07:15:00Z", ["OLDER"])
+        old = data_file("2026-10-02T07:15:00Z", ["AAA", "BBB", "CCC", "DDD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
         self.output.write_text(old, encoding="utf-8")
         self.previous.write_text(kept, encoding="utf-8")
         # 3 of 4 is 75%. Refused before the prices are fetched.
@@ -962,7 +1381,7 @@ class MainTest(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError,
                 r"^Only 3 funds returned, down from 4 in the data fetched at "
-                r"2026-10-27T07:15:00Z \(expected at least 90%\)$",
+                r"2026-10-02T07:15:00Z \(expected at least 90%\)$",
             ):
                 fetch_funds.main()
         self.assertEqual(fetch.call_count, 1)
@@ -970,12 +1389,126 @@ class MainTest(unittest.TestCase):
         self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
         self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
 
+    def assert_refused(self, responses, message):
+        """main() raises ValueError matching message and changes neither file."""
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"])
+        kept = data_file("2026-09-30T07:15:00Z", ["OLDER"])
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(kept, encoding="utf-8")
+        with mock.patch.object(fetch_funds.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, message):
+                self.run_main(responses)
+        self.assertEqual(self.output.read_text(encoding="utf-8"), old)
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        self.assertEqual(sorted(os.listdir(self.directory)), ["funds.json", "previous.json"])
+
+    def window_responses(self, empty=None, partial=None):
+        """Price responses for a window of three requests, with weekday prices.
+
+        The request at index empty, if given, returns no rows; the one at
+        index partial, if given, returns rows for the first fund only.
+        """
+        ranges = fetch_funds.price_ranges(date(2026, 10, 3) - timedelta(days=86), date(2026, 10, 3))
+        self.assertEqual(len(ranges), 3)
+        return [
+            {"resultList": []} if n == empty
+            else prices_response(codes=CODES[:1] if n == partial else CODES, dates=business_days(*bounds))
+            for n, bounds in enumerate(ranges)
+        ]
+
+    def test_an_empty_middle_price_request_changes_neither_file(self):
+        # A window of three requests, each with more rows than MAX_ROWS.
+        with mock.patch.multiple(fetch_funds, PRICE_WINDOW_DAYS=86, MAX_PRICE_ROWS=1000):
+            # The full window passes, so only the empty request is refused.
+            with mock.patch.object(fetch_funds.time, "sleep"):
+                self.run_main([funds_response(), *self.window_responses()])
+            self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["priceDates"][-1], "2026-10-02")
+            self.assert_refused(
+                [funds_response(), *self.window_responses(empty=1)],
+                r"^Price dates jump from 2026-08-06 to 2026-09-07 \(32 days; at most 14 expected\)",
+            )
+
+    def test_a_partial_middle_or_last_price_request_changes_neither_file(self):
+        with mock.patch.multiple(fetch_funds, PRICE_WINDOW_DAYS=86, MAX_PRICE_ROWS=1000):
+            for partial, message in [
+                (1, r"^Prices on 2026-08-07 for only 1 of the 3 funds priced in the window"),
+                (2, r"^Prices on 2026-09-07 for only 1 of the 3 funds priced in the window"),
+            ]:
+                with self.subTest(partial=partial):
+                    self.assert_refused([funds_response(), *self.window_responses(partial=partial)], message)
+
+    def test_a_stale_or_older_price_window_changes_neither_file(self):
+        for dates, message in [
+            # The last request came back empty: 16 days before 3 Oct.
+            (["2026-09-15", "2026-09-16", "2026-09-17"], r"^The last price date 2026-09-17 is 16 days before 2026-10-03"),
+            # Ends before the existing file's 2026-10-01.
+            (["2026-09-28", "2026-09-29", "2026-09-30"], r"^The last price date 2026-09-30 is earlier than 2026-10-01 in the existing data"),
+        ]:
+            with self.subTest(dates=dates):
+                self.assert_refused([funds_response(), prices_response(dates=dates)], message)
+
+    def test_a_price_window_ending_on_the_existing_last_date_is_written(self):
+        old = data_file("2026-10-02T07:15:00Z", ["OLD"], DATES)
+        self.output.write_text(old, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["funds"][0]["code"], "AAA")
+
+    def test_non_finite_returns_and_prices_are_written_as_null(self):
+        funds = funds_response()
+        funds["resultList"][0].update(getiri1a="NaN", getiri3a=float("nan"), getiri6a="Infinity", riskDegeri=float("inf"))
+        funds["resultList"][1].update(getiri5y="-Infinity")
+        prices = prices_response()
+        for row in prices["resultList"]:
+            if row["fonKodu"] == "AAA":
+                row["fiyat"] = {"2026-09-30": float("nan"), "2026-10-01": "Infinity", "2026-10-02": 1.75}[row["tarih"]]
+            elif row["fonKodu"] == "CCC" and row["tarih"] == "2026-10-02":
+                row["fiyat"] = float("-inf")
+        # With three funds, one missing price leaves a date at 67%.
+        with mock.patch.object(fetch_funds, "MIN_DATE_COVERAGE_PERCENT", 60):
+            self.run_main([funds, prices])
+        text = self.output.read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"NaN|Infinity")
+        new = fetch_funds.parse_strict(text)
+        if NODE:
+            self.assertTrue(node_parses(text))
+        by_code = {fund["code"]: fund for fund in new["funds"]}
+        self.assertEqual(new["priceDates"], DATES)
+        self.assertEqual(
+            by_code["AAA"]["returns"],
+            {"1m": None, "3m": None, "6m": None, "1y": 45, "ytd": 30.1, "3y": 210.4, "5y": 400},
+        )
+        self.assertIsNone(by_code["AAA"]["risk"])
+        self.assertEqual(by_code["AAA"]["prices"], [None, None, 1.75])
+        self.assertIsNone(by_code["BBB"]["returns"]["5y"])
+        self.assertEqual(by_code["BBB"]["prices"], [1.5, 1.5, 1.5])
+        self.assertEqual(by_code["CCC"]["prices"], [1.5, 1.5, None])
+
+    def test_a_non_finite_rule_column_changes_neither_file(self):
+        self.assert_refused(
+            [with_returns(CODES, "getiri1y", ["NaN", float("inf"), 42.5]), prices_response()],
+            r"^1Y return missing or 0 for 2 of 3 funds",
+        )
+
+    def test_a_non_finite_value_reaching_render_changes_neither_file(self):
+        # A value that slips past the parsing (here a size) stops the run
+        # before either file is written.
+        sizes = {code: float("nan") if code == "BBB" else None for code in CODES}
+        with mock.patch.object(fetch_funds, "parse_sizes", return_value=sizes):
+            self.assert_refused(
+                [funds_response(), prices_response()],
+                r"^Fund BBB has a NaN or infinite value, which the page can't read",
+            )
+
+    def test_the_sanity_check_parses_as_strictly_as_the_browser(self):
+        with mock.patch.object(fetch_funds, "render", return_value='{"funds": [NaN]}\n'):
+            self.assert_refused([funds_response(), prices_response()], r"^NaN is not valid JSON$")
+
     def test_a_list_at_least_90_percent_as_long_is_written(self):
-        old = data_file("2026-10-27T07:15:00Z", CODES)
+        old = data_file("2026-10-02T07:15:00Z", CODES)
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
-        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["fetchedAt"], "2026-10-03T07:15:00Z")
 
 
 if __name__ == "__main__":

@@ -242,8 +242,8 @@ jobs:
           gh issue comment "${{ steps.check.outputs.issue }}" --body-file "$RUNNER_TEMP/message.md"
           gh issue close "${{ steps.check.outputs.issue }}"
 
-  # On pushes to main (code changes), run the unit and page tests from
-  # test.yml before deploying. Data runs (schedule, workflow_dispatch) skip
+  # On pushes to main (code changes), run the unit and page tests and the
+  # workflow lint from test.yml before deploying. Data runs (schedule, workflow_dispatch) skip
   # this so that a test failure never holds back the daily data; instead the
   # build job's "Choose the code to deploy" step deploys only code whose tests
   # passed on an earlier push.
