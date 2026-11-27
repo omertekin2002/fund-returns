@@ -6,7 +6,9 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,6 +34,33 @@ small_limits = mock.patch.multiple(
 
 CODES = ["AAA", "BBB", "CCC"]
 DATES = ["2026-09-30", "2026-10-01", "2026-10-02"]
+
+# The non-finite values TEFAS could send: Python's json.loads turns the JSON
+# tokens NaN, Infinity and -Infinity into floats, and .NET serializers write
+# them as strings.
+NON_FINITE = [
+    float("nan"),
+    float("inf"),
+    float("-inf"),
+    "NaN",
+    "Infinity",
+    "-Infinity",
+    "nan",
+    "inf",
+    "1e400",
+]
+NODE = shutil.which("node")
+REPO = SCRIPT.parent.parent
+
+
+def node_parses(text):
+    """Whether Node's JSON.parse accepts text, as the page's fetch().json() does."""
+    result = subprocess.run(
+        [NODE, "-e", 'JSON.parse(require("fs").readFileSync(0, "utf8"))'],
+        input=text.encode("utf-8"),
+        capture_output=True,
+    )
+    return result.returncode == 0
 
 
 def fund_row(code, **fields):
@@ -120,8 +149,30 @@ class ParseTest(unittest.TestCase):
         self.assertIsNone(returns["5y"])
         self.assertEqual(returns["1m"], 3.5)
 
+    def test_non_finite_returns_become_none(self):
+        for value in NON_FINITE:
+            with self.subTest(value=value):
+                raw = funds_response()
+                raw["resultList"][0].update(getiri1a=value, getiri6a=value, getiri5y=value)
+                returns = fetch_funds.parse(raw)[0]["returns"]
+                self.assertIsNone(returns["1m"])
+                self.assertIsNone(returns["6m"])
+                self.assertIsNone(returns["5y"])
+                self.assertEqual(returns["3m"], 9.5)
+
+    def test_non_finite_json_tokens_become_none(self):
+        # What json.loads makes of a body with bare NaN / Infinity tokens.
+        body = json.dumps(funds_response()).replace('"getiri3a": 9.5', '"getiri3a": NaN', 1)
+        body = body.replace('"getiri1y": 45', '"getiri1y": -Infinity', 1)
+        body = body.replace('"getiriyb": 30.1', '"getiriyb": Infinity', 1)
+        returns = fetch_funds.parse(json.loads(body))[0]["returns"]
+        self.assertEqual(
+            returns,
+            {"1m": 3.5, "3m": None, "6m": 20.25, "1y": None, "ytd": None, "3y": 210.4, "5y": 400.0},
+        )
+
     def test_bad_risk_becomes_none(self):
-        for risk in [None, "", "yüksek", [6]]:
+        for risk in [None, "", "yüksek", [6], *NON_FINITE]:
             with self.subTest(risk=risk):
                 raw = funds_response()
                 raw["resultList"][0]["riskDegeri"] = risk
@@ -213,6 +264,21 @@ class CheckReturnsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"^{label} return missing or 0 for 3 of 5"):
                     fetch_funds.parse(raw)
 
+    def test_rejects_a_non_finite_rule_column(self):
+        for field, label in self.RULE_FIELDS.items():
+            with self.subTest(field=field):
+                # 2 of 5 is 40%: accepted, with the non-finite values as None.
+                raw = with_returns(self.FIVE, field, ["NaN", float("inf"), 1.5, 2.5, -3])
+                funds = fetch_funds.parse(raw)
+                self.assertEqual(
+                    [fund["returns"][fetch_funds.RETURN_FIELDS[field]] for fund in funds],
+                    [None, None, 1.5, 2.5, -3.0],
+                )
+                # 3 of 5 is 60%: refused like an empty column.
+                raw = with_returns(self.FIVE, field, ["NaN", float("inf"), "-Infinity", 2.5, -3])
+                with self.assertRaisesRegex(ValueError, f"^{label} return missing or 0 for 3 of 5"):
+                    fetch_funds.parse(raw)
+
     def test_a_negative_return_is_not_missing(self):
         raw = with_returns(CODES, "getiri1a", [-0.5, -12, "-3.25"])
         self.assertEqual(len(fetch_funds.parse(raw)), 3)
@@ -268,6 +334,17 @@ class ParsePricesTest(unittest.TestCase):
         self.assertEqual(prices["AAA"], [None, 2.25, 1.5])
         self.assertEqual(prices["BBB"], [None, 1.5, 1.5])
         self.assertEqual(prices["CCC"], [None, 1.5, 1.5])
+
+    def test_non_finite_price_becomes_none(self):
+        for value in NON_FINITE:
+            with self.subTest(value=value):
+                raw = prices_response()
+                # AAA's price on the first date; the others still have one.
+                raw["resultList"][0]["fiyat"] = value
+                dates, prices = parse_prices(raw, CODES)
+                self.assertEqual(dates, DATES)
+                self.assertEqual(prices["AAA"], [None, 1.5, 1.5])
+                self.assertEqual(prices["BBB"], [1.5, 1.5, 1.5])
 
     def test_ignores_codes_not_in_the_fund_list(self):
         raw = prices_response(CODES + ["ZZZ"])
@@ -593,6 +670,50 @@ class RenderTest(unittest.TestCase):
         self.assertIn("ÖRNEK PORTFÖY ŞEMSİYE ĞÜÇ FONU", text)
         self.assertIn("Para Piyasası Şemsiye Fonu", text)
         self.assertNotIn("\\u", text)
+
+    def test_output_parses_strictly(self):
+        self.assertEqual(fetch_funds.parse_strict(self.render())["funds"], self.funds)
+
+    def test_refuses_a_non_finite_value(self):
+        for value in [float("nan"), float("inf"), float("-inf")]:
+            for path in [("returns", "6m"), ("prices", 1), ("size",)]:
+                with self.subTest(value=value, path=path):
+                    funds = json.loads(json.dumps(self.funds))
+                    target = funds[1]
+                    for key in path[:-1]:
+                        target = target[key]
+                    target[path[-1]] = value
+                    with self.assertRaisesRegex(
+                        ValueError, "^Fund BBB has a NaN or infinite value, which the page can't read"
+                    ):
+                        fetch_funds.render(funds, "2026-10-20T07:15:33Z", DATES)
+
+    def test_rerenders_the_committed_editions_unchanged(self):
+        for name in ["funds.json", "previous.json"]:
+            path = REPO / "site" / "data" / name
+            if not path.exists():
+                continue
+            with self.subTest(name=name):
+                text = path.read_text(encoding="utf-8")
+                data = fetch_funds.parse_strict(text)
+                self.assertEqual(
+                    fetch_funds.render(data["funds"], data["fetchedAt"], data["priceDates"]),
+                    text,
+                )
+
+
+class ParseStrictTest(unittest.TestCase):
+    def test_parses_json(self):
+        self.assertEqual(
+            fetch_funds.parse_strict('{"a": [1.5, null, -2, "NaN"]}'),
+            {"a": [1.5, None, -2, "NaN"]},
+        )
+
+    def test_refuses_nan_and_infinity(self):
+        for token in ["NaN", "Infinity", "-Infinity"]:
+            with self.subTest(token=token):
+                with self.assertRaisesRegex(ValueError, f"^{token} is not valid JSON$"):
+                    fetch_funds.parse_strict(f'{{"a": [1, {token}]}}')
 
 
 class WriteAtomicallyTest(unittest.TestCase):
@@ -1244,6 +1365,54 @@ class MainTest(unittest.TestCase):
         self.output.write_text(old, encoding="utf-8")
         self.run_main()
         self.assertEqual(json.loads(self.output.read_text(encoding="utf-8"))["funds"][0]["code"], "AAA")
+
+    def test_non_finite_returns_and_prices_are_written_as_null(self):
+        funds = funds_response()
+        funds["resultList"][0].update(getiri1a="NaN", getiri3a=float("nan"), getiri6a="Infinity", riskDegeri=float("inf"))
+        funds["resultList"][1].update(getiri5y="-Infinity")
+        prices = prices_response()
+        for row in prices["resultList"]:
+            if row["fonKodu"] == "AAA":
+                row["fiyat"] = {"2026-09-30": float("nan"), "2026-10-01": "Infinity", "2026-10-02": 1.75}[row["tarih"]]
+            elif row["fonKodu"] == "CCC" and row["tarih"] == "2026-10-02":
+                row["fiyat"] = float("-inf")
+        self.run_main([funds, prices])
+        text = self.output.read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"NaN|Infinity")
+        new = fetch_funds.parse_strict(text)
+        if NODE:
+            self.assertTrue(node_parses(text))
+        by_code = {fund["code"]: fund for fund in new["funds"]}
+        self.assertEqual(new["priceDates"], DATES)
+        self.assertEqual(
+            by_code["AAA"]["returns"],
+            {"1m": None, "3m": None, "6m": None, "1y": 45, "ytd": 30.1, "3y": 210.4, "5y": 400},
+        )
+        self.assertIsNone(by_code["AAA"]["risk"])
+        self.assertEqual(by_code["AAA"]["prices"], [None, None, 1.75])
+        self.assertIsNone(by_code["BBB"]["returns"]["5y"])
+        self.assertEqual(by_code["BBB"]["prices"], [1.5, 1.5, 1.5])
+        self.assertEqual(by_code["CCC"]["prices"], [1.5, 1.5, None])
+
+    def test_a_non_finite_rule_column_changes_neither_file(self):
+        self.assert_refused(
+            [with_returns(CODES, "getiri1y", ["NaN", float("inf"), 42.5]), prices_response()],
+            r"^1Y return missing or 0 for 2 of 3 funds",
+        )
+
+    def test_a_non_finite_value_reaching_render_changes_neither_file(self):
+        # A value that slips past the parsing (here a size) stops the run
+        # before either file is written.
+        sizes = {code: float("nan") if code == "BBB" else None for code in CODES}
+        with mock.patch.object(fetch_funds, "parse_sizes", return_value=sizes):
+            self.assert_refused(
+                [funds_response(), prices_response()],
+                r"^Fund BBB has a NaN or infinite value, which the page can't read",
+            )
+
+    def test_the_sanity_check_parses_as_strictly_as_the_browser(self):
+        with mock.patch.object(fetch_funds, "render", return_value='{"funds": [NaN]}\n'):
+            self.assert_refused([funds_response(), prices_response()], r"^NaN is not valid JSON$")
 
     def test_a_list_at_least_90_percent_as_long_is_written(self):
         old = data_file("2026-10-02T07:15:00Z", CODES)
