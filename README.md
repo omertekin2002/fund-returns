@@ -287,15 +287,29 @@ The button is disabled until the data has loaded, and while no fund matches.
   decision. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
   owner (see [Daily trigger](#daily-trigger-cron-joborg)). Pushes to `main`
-  redeploy the site without fetching, after its `tests` job (the two jobs from
-  `test.yml`) passes. You can also run it by hand from the Actions tab
+  redeploy the site without fetching, after its `tests` job (the three jobs
+  from `test.yml`) passes. You can also run it by hand from the Actions tab
   (**Update fund data and deploy site › Run workflow**).
-- [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`
-  and the page tests (`npm run test:e2e`, see
-  [Local development](#local-development)) as two jobs on every pull request
-  and on every push to `main`, with read-only access to the repository.
-  `update.yml` runs the same two jobs on a push to `main` and deploys only
-  after both pass, so a code change that breaks a test doesn't go live.
+- [`.github/workflows/test.yml`](.github/workflows/test.yml) runs `npm test`,
+  the page tests (`npm run test:e2e`, see
+  [Local development](#local-development)) and a `lint` job as three jobs on
+  every pull request and on every push to `main`, with read-only access to
+  the repository. The `lint` job runs
+  [actionlint](https://github.com/rhysd/actionlint) 1.7.12, with shellcheck
+  on every `run:` block, over both workflows, so a mistake in a step that only
+  data runs reach (a misspelt step id in an `if:`, a broken shell script)
+  fails the PR instead of the next daily run. Run the same check locally
+  with Docker (it isn't part of `npm test`):
+
+  ```sh
+  docker run --rm -v "$PWD":/repo --workdir /repo rhysd/actionlint:1.7.12
+  ```
+
+  Dependabot doesn't update that image, so its version is bumped by hand in
+  `test.yml` and here.
+  `update.yml` runs the same three jobs on a push to `main` and deploys only
+  after all pass, so a code change that breaks a test or the lint doesn't go
+  live.
   Data runs (the 10:15 trigger, the fallback schedule and manual runs) don't
   run the tests, so they never hold back the daily update, but they don't
   deploy untested code either.
