@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import unittest
 from datetime import date, timedelta
@@ -709,14 +710,20 @@ class FetchJsonTest(unittest.TestCase):
         self.assertIn(f"Attempt {attempts}/{attempts} failed", self.stderr.getvalue())
 
 
-def data_file(fetched_at, codes=("AAA",)):
+# Price dates that end the day before DATES, so data fetched from the mocks
+# (which end on DATES[-1]) has a newer last price date.
+EARLIER_DATES = ["2026-09-29", "2026-09-30", "2026-10-01"]
+
+
+def data_file(fetched_at, codes=("AAA",), price_dates=EARLIER_DATES):
     """The text of a funds.json fetched at fetched_at."""
     funds = [{"code": code, "returns": {}, "prices": []} for code in codes]
-    return fetch_funds.render(funds, fetched_at, DATES)
+    return fetch_funds.render(funds, fetched_at, price_dates)
 
 
 class RotatePreviousTest(unittest.TestCase):
     NOW = "2026-10-28T07:15:00Z"  # 10:15 on 28 Oct in Istanbul
+    NEW_LAST = DATES[-1]  # the new data's last price date
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -726,18 +733,18 @@ class RotatePreviousTest(unittest.TestCase):
         self.previous = self.directory / "previous.json"
         stdout = mock.patch("sys.stdout", new_callable=io.StringIO)
         stderr = mock.patch("sys.stderr", new_callable=io.StringIO)
-        stdout.start()
+        self.stdout = stdout.start()
         self.stderr = stderr.start()
         self.addCleanup(stdout.stop)
         self.addCleanup(stderr.stop)
 
-    def rotate(self):
-        return fetch_funds.rotate_previous(str(self.output), str(self.previous), self.NOW)
+    def rotate(self, new_last=NEW_LAST, now=NOW):
+        return fetch_funds.rotate_previous(str(self.output), str(self.previous), now, new_last)
 
     def files(self):
         return sorted(os.listdir(self.directory))
 
-    def test_keeps_data_from_an_earlier_day(self):
+    def test_keeps_data_from_an_earlier_price_day(self):
         old = data_file("2026-10-27T07:15:00Z")
         self.output.write_text(old, encoding="utf-8")
         self.previous.write_text(data_file("2026-10-24T07:15:00Z"), encoding="utf-8")
@@ -746,22 +753,107 @@ class RotatePreviousTest(unittest.TestCase):
         self.assertEqual(self.output.read_text(encoding="utf-8"), old)
         self.assertEqual(self.files(), ["funds.json", "previous.json"])
 
+    def test_a_holiday_without_a_new_price_date_leaves_previous_alone(self):
+        # Fetched on an earlier day, but with the same last price date.
+        kept = data_file("2026-10-26T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        self.assertIn(
+            f"Keeping {os.path.normpath(self.previous)}: no new price date since 2026-10-02",
+            self.stdout.getvalue(),
+        )
+
+    def test_an_earlier_new_price_date_leaves_previous_alone(self):
+        kept = data_file("2026-10-26T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate(new_last="2026-10-01"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+
+    def test_a_holiday_without_previous_writes_none(self):
+        self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.files(), ["funds.json"])
+
+    def test_leaves_previous_alone_on_the_same_day_with_the_same_price_date(self):
+        kept = data_file("2026-10-27T07:15:00Z")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.output.write_text(data_file("2026-10-28T07:16:00Z", price_dates=DATES), encoding="utf-8")
+        self.assertFalse(self.rotate())
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+
+    def test_rotates_on_the_same_day_with_a_newer_price_date(self):
+        # TEFAS was late at 10:15, and a later run that day brings the new date.
+        old = data_file("2026-10-28T07:15:00Z")
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(data_file("2026-10-27T07:15:00Z"), encoding="utf-8")
+        self.assertTrue(self.rotate(now="2026-10-28T09:37:00Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+
+    def test_replays_the_republic_day_holiday(self):
+        # The editions of 27 and 28 Oct 2026, then the 29 Oct holiday, when
+        # TEFAS still had 28 Oct as its last price date.
+        edition_27 = data_file("2026-10-27T07:15:33Z", ["OLD"], ["2026-10-24", "2026-10-27"])
+        edition_28 = data_file("2026-10-28T07:15:33Z", ["NEW"], ["2026-10-27", "2026-10-28"])
+        self.previous.write_text(edition_27, encoding="utf-8")
+        self.output.write_text(edition_28, encoding="utf-8")
+        self.assertFalse(self.rotate(new_last="2026-10-28", now="2026-10-29T07:15:37Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), edition_27)
+        # The holiday's edition replaces funds.json; the next trading day rotates it.
+        edition_29 = data_file("2026-10-29T07:15:37Z", ["NEW"], ["2026-10-27", "2026-10-28"])
+        self.output.write_text(edition_29, encoding="utf-8")
+        self.assertTrue(self.rotate(new_last="2026-10-30", now="2026-10-30T07:15:30Z"))
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), edition_29)
+
+    def test_without_valid_price_dates_compares_istanbul_days(self):
+        def old_file(fetched_at, **fields):
+            return json.dumps({"fetchedAt": fetched_at, **fields, "funds": []})
+
+        for label, fields in [
+            ("no priceDates", {}),
+            ("empty list", {"priceDates": []}),
+            ("not a list", {"priceDates": "2026-10-02"}),
+            ("non-string last entry", {"priceDates": ["2026-10-01", 20261002]}),
+            ("null last entry", {"priceDates": ["2026-10-01", None]}),
+            ("not a date", {"priceDates": ["2026-10-01", "yesterday"]}),
+            ("invalid date", {"priceDates": ["2026-10-01", "2026-13-01"]}),
+            ("other format", {"priceDates": ["2026-10-01", "20261002"]}),
+        ]:
+            with self.subTest(label):
+                self.previous.unlink(missing_ok=True)
+                # The same Istanbul day: kept as it is.
+                self.output.write_text(old_file("2026-10-28T06:00:00Z", **fields), encoding="utf-8")
+                self.assertFalse(self.rotate())
+                self.assertFalse(self.previous.exists())
+                # An earlier Istanbul day: copied.
+                old = old_file("2026-10-27T07:15:00Z", **fields)
+                self.output.write_text(old, encoding="utf-8")
+                self.assertTrue(self.rotate())
+                self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
+
+    def test_without_a_valid_new_price_date_compares_istanbul_days(self):
+        for new_last in [None, "", "yesterday", 20261002]:
+            with self.subTest(new_last=new_last):
+                self.previous.unlink(missing_ok=True)
+                self.output.write_text(data_file("2026-10-28T06:00:00Z"), encoding="utf-8")
+                self.assertFalse(self.rotate(new_last=new_last))
+                self.assertFalse(self.previous.exists())
+                self.output.write_text(data_file("2026-10-27T07:15:00Z", price_dates=DATES), encoding="utf-8")
+                self.assertTrue(self.rotate(new_last=new_last))
+                self.assertTrue(self.previous.exists())
+
     def test_compares_istanbul_dates(self):
+        # Without price dates, only the fetch day decides.
         # 23:30 UTC on 27 Oct is already 02:30 on 28 Oct in Istanbul.
-        self.output.write_text(data_file("2026-10-27T23:30:00Z"), encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T23:30:00Z", price_dates=[]), encoding="utf-8")
         self.assertFalse(self.rotate())
         self.assertFalse(self.previous.exists())
         # 20:59 UTC on 27 Oct is still 23:59 on 27 Oct in Istanbul.
-        self.output.write_text(data_file("2026-10-27T20:59:00Z"), encoding="utf-8")
+        self.output.write_text(data_file("2026-10-27T20:59:00Z", price_dates=[]), encoding="utf-8")
         self.assertTrue(self.rotate())
         self.assertTrue(self.previous.exists())
-
-    def test_leaves_previous_alone_when_the_data_is_from_the_same_day(self):
-        kept = data_file("2026-10-27T07:15:00Z")
-        self.previous.write_text(kept, encoding="utf-8")
-        self.output.write_text(data_file("2026-10-28T07:16:00Z"), encoding="utf-8")
-        self.assertFalse(self.rotate())
-        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
 
     def test_missing_output_writes_no_previous(self):
         self.assertFalse(self.rotate())
@@ -910,6 +1002,19 @@ class MainTest(unittest.TestCase):
         self.run_main()
         self.assertEqual(self.previous.read_text(encoding="utf-8"), old)
         self.assertEqual(codes_of(json.loads(self.output.read_text(encoding="utf-8"))["funds"]), CODES)
+
+    def test_a_holiday_run_keeps_previous(self):
+        # The old file ends on the same price date as the mocked prices.
+        old = data_file("2026-10-27T07:15:00Z", ["OLD"], DATES)
+        kept = data_file("2026-10-26T07:15:00Z", ["OLDER"])
+        self.output.write_text(old, encoding="utf-8")
+        self.previous.write_text(kept, encoding="utf-8")
+        self.run_main()
+        self.assertEqual(self.previous.read_text(encoding="utf-8"), kept)
+        new = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(new["fetchedAt"], "2026-10-28T07:15:00Z")
+        self.assertEqual(codes_of(new["funds"]), CODES)
+        self.assertIn("no new price date since 2026-10-02", sys.stdout.getvalue())
 
     def test_writes_each_funds_size_from_its_latest_price_date(self):
         prices = prices_response()

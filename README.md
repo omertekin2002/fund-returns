@@ -92,10 +92,16 @@ longer in the data: OLD.".
 
 - Before each update, [`scripts/fetch_funds.py`](scripts/fetch_funds.py)
   keeps the existing `site/data/funds.json` as
-  [`site/data/previous.json`](site/data/previous.json), but only if it is
-  from an earlier Istanbul day. A second run on the same day keeps the
-  existing `previous.json`, so the page always compares against the last
-  earlier day. A failed fetch changes neither file.
+  [`site/data/previous.json`](site/data/previous.json), but only if the new
+  data's last price date is later than the existing file's, so the page
+  always compares against the edition of the last earlier price day. A run
+  that brings no new price date keeps the existing `previous.json`: on a
+  TEFAS holiday that falls on a weekday, the update still runs and publishes
+  any revised returns, but the summary keeps showing the last trading day's
+  changes until the next trading day. The same goes for a second run on the
+  same day, unless it brings a newer price date (TEFAS was late at the first
+  run). An existing file without valid price dates is kept only if it was
+  fetched on an earlier Istanbul day. A failed fetch changes neither file.
 - After the table is on screen, the page loads `previous.json` and checks
   both files' funds with the same rules (and each file's own Sharpe ratios
   and risk-free return), in [`site/changes.js`](site/changes.js). A fund
@@ -250,7 +256,7 @@ The button is disabled until the data has loaded, and while no fund matches.
   [Fund size](#fund-size); a missing or invalid size never fails the
   update). It writes both to
   [`site/data/funds.json`](site/data/funds.json), after keeping an earlier
-  day's file as `site/data/previous.json` (see
+  price day's file as `site/data/previous.json` (see
   [Changes since the last update](#changes-since-the-last-update)). It uses
   only the Python standard library and refuses to overwrite the file if a
   response looks wrong: a TEFAS error, a missing or incomplete row, fewer

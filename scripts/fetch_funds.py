@@ -15,20 +15,25 @@ The output file is only replaced after the response passes validation.
 
 Before replacing it, the script keeps the existing file's content as
 previous.json next to it, so the website can show which funds entered or left
-the passing list since the last update. It does this only when the existing
-file is from an earlier Istanbul day, so a second run on the same day still
-compares against the last earlier day.
+the passing list since the last update. It does this only when the new data's
+last price date is later than the existing file's, so previous.json is always
+the edition of the last earlier price day. A run that brings no new price date
+(a TEFAS holiday on a weekday, or a second run on the same day) keeps the
+existing previous.json, so the page still shows that trading day's changes.
+An existing file without valid price dates is kept only when it was fetched on
+an earlier Istanbul day.
 """
 
 import http.client
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import time
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 API_URL = "https://www.tefas.gov.tr/api/funds/fonGetiriBazliBilgiGetir"
@@ -403,12 +408,38 @@ def istanbul_date(iso):
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ISTANBUL).date()
 
 
-def rotate_previous(output, previous, fetched_at):
-    """Copy the existing output file to previous if it is from an earlier day.
+def valid_price_date(value):
+    """value if it is a "YYYY-MM-DD" date string, otherwise None."""
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return None
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return None
+    return value
+
+
+def last_price_date(data):
+    """The last of data's priceDates if it is a valid date, otherwise None."""
+    dates = data.get("priceDates")
+    if not isinstance(dates, list) or not dates:
+        return None
+    return valid_price_date(dates[-1])
+
+
+def rotate_previous(output, previous, fetched_at, new_last_price_date):
+    """Copy the existing output file to previous if the new data is newer.
+
+    The new data is newer when its last price date (new_last_price_date) is
+    later than the existing file's. On a TEFAS holiday, or a second run that
+    brings no new price date, previous keeps the edition of the last earlier
+    price day. If either file has no valid last price date, the existing file
+    is copied only when it was fetched on an earlier Istanbul day than
+    fetched_at.
 
     Returns True if previous was written. A missing, unreadable or invalid
-    output file, or one from the same Istanbul day as fetched_at, leaves
-    previous as it is. Never raises: the new data must still be written.
+    output file leaves previous as it is. Never raises: the new data must still
+    be written.
     """
     try:
         with open(output, encoding="utf-8") as handle:
@@ -425,7 +456,16 @@ def rotate_previous(output, previous, fetched_at):
         old_fetched_at = data.get("fetchedAt")
         if not isinstance(old_fetched_at, str):
             raise ValueError("it has no fetchedAt")
-        if istanbul_date(old_fetched_at) >= istanbul_date(fetched_at):
+        old_last = last_price_date(data)
+        new_last = valid_price_date(new_last_price_date)
+        if old_last and new_last:
+            if new_last <= old_last:
+                print(
+                    f"Keeping {os.path.normpath(previous)}: "
+                    f"no new price date since {old_last}"
+                )
+                return False
+        elif istanbul_date(old_fetched_at) >= istanbul_date(fetched_at):
             print(f"Keeping {os.path.normpath(previous)}: the data was already fetched today")
             return False
         # The same text as the old file, so git stores it only once.
@@ -458,7 +498,7 @@ def main():
     fetched_at = now.isoformat().replace("+00:00", "Z")
     text = render(funds, fetched_at, price_dates)
     json.loads(text)  # sanity check that the hand-assembled JSON is valid
-    rotate_previous(output, previous, fetched_at)
+    rotate_previous(output, previous, fetched_at, price_dates[-1])
     write_atomically(output, text)
     sized = sum(1 for fund in funds if fund["size"] is not None)
     print(
