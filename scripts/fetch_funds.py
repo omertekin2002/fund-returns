@@ -13,6 +13,12 @@ Usage: python3 scripts/fetch_funds.py [output_path]
 Uses only the Python standard library so the workflow needs no install step.
 The output file is only replaced after the response passes validation.
 
+A NaN or infinite return or price from TEFAS (a JSON token, or a string such
+as "NaN" or "Infinity") counts as missing, like an empty value: the browser's
+JSON.parse can't read those values, so a single one would stop the page
+loading. The output is written and checked as strict JSON, so the run fails
+before writing anything if a non-finite value ever gets through.
+
 Before replacing it, the script keeps the existing file's content as
 previous.json next to it, so the website can show which funds entered or left
 the passing list since the last update. It does this only when the new data's
@@ -173,15 +179,23 @@ def fetch_json(url, payload, referer):
 
 
 def to_number(value):
+    """value as a finite float, or None if it is missing, empty or not finite.
+
+    TEFAS may send NaN or Infinity as a JSON token or as a string ("NaN",
+    "Infinity", "-Infinity"); they count as missing, like an empty value.
+    """
     if value is None or value == "":
         return None
-    return float(value)
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def to_risk(value):
+    """value as an int, or None if it isn't a whole number or is infinite."""
     try:
         return int(value)
-    except (TypeError, ValueError):
+    # int() raises OverflowError for an infinite float.
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -423,7 +437,30 @@ def parse_sizes(responses, codes):
     return {code: latest[code][1] if code in latest else None for code in codes}
 
 
+def strict_json(value):
+    """value as JSON text, raising ValueError for NaN or Infinity anywhere in it.
+
+    Python's json.dumps writes those as bare NaN / Infinity by default, which
+    the browser's JSON.parse rejects.
+    """
+    return json.dumps(value, ensure_ascii=False, allow_nan=False)
+
+
+def reject_constant(name):
+    raise ValueError(f"{name} is not valid JSON")
+
+
+def parse_strict(text):
+    """Parse text as JSON the way the browser's JSON.parse does.
+
+    Python's json.loads accepts NaN, Infinity and -Infinity; this raises
+    ValueError for them.
+    """
+    return json.loads(text, parse_constant=reject_constant)
+
+
 def render(funds, fetched_at, price_dates):
+    """The output file's text. Raises ValueError for a NaN or infinite value."""
     header = {
         "fetchedAt": fetched_at,
         "source": PAGE_URL,
@@ -433,14 +470,22 @@ def render(funds, fetched_at, price_dates):
         "priceDates": price_dates,
     }
     header_lines = "".join(
-        f"  {json.dumps(key)}: {json.dumps(value, ensure_ascii=False)},\n"
+        f"  {json.dumps(key)}: {strict_json(value)},\n"
         for key, value in header.items()
     )
     # One fund per line keeps the daily git diffs readable.
-    fund_lines = ",\n".join(
-        "    " + json.dumps(fund, ensure_ascii=False) for fund in funds
-    )
+    fund_lines = ",\n".join("    " + render_fund(fund) for fund in funds)
     return "{\n" + header_lines + '  "funds": [\n' + fund_lines + "\n  ]\n}\n"
+
+
+def render_fund(fund):
+    try:
+        return strict_json(fund)
+    except ValueError as exc:
+        raise ValueError(
+            f"Fund {fund.get('code')} has a NaN or infinite value, which the page "
+            f"can't read: {exc}"
+        ) from exc
 
 
 def write_atomically(path, text):
@@ -553,7 +598,9 @@ def main():
 
     fetched_at = now.isoformat().replace("+00:00", "Z")
     text = render(funds, fetched_at, price_dates)
-    json.loads(text)  # sanity check that the hand-assembled JSON is valid
+    # Sanity check that the hand-assembled JSON is valid, as strictly as the
+    # browser reads it.
+    parse_strict(text)
     rotate_previous(output, previous, fetched_at, price_dates[-1])
     write_atomically(output, text)
     sized = sum(1 for fund in funds if fund["size"] is not None)
