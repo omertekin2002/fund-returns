@@ -514,7 +514,9 @@ async function init() {
       "funds traded on TEFAS are checked against six rules. " +
       `${countFormat.format(passing)} pass all six and are listed above.` +
       (stale ? " The latest daily update is missing, so these figures may be out of date." : "") +
-      (behind ? " The latest TEFAS prices are older than this update, so these figures describe an earlier day." : "");
+      (behind
+        ? " The latest TEFAS prices are older than this update, so the Sharpe ratios and price lines stop at an earlier day."
+        : "");
     // A stale update and lagging prices are separate problems, so when both
     // apply the warning says both, the stale one first.
     const warnings = [];

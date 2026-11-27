@@ -77,7 +77,7 @@ test("prices two or more weekdays before the fetch day are behind", () => {
   assert.equal(
     pricesBehindText(FRIDAY_FETCH, "2026-11-20"),
     "TEFAS prices end on 20 Nov 2026, before this update on 27 Nov 2026: " +
-      "the returns, Sharpe ratios and changes describe that day.",
+      "the Sharpe ratios and 4-week price lines stop at that day.",
   );
 });
 

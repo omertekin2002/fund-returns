@@ -1455,7 +1455,7 @@ test.describe("prices behind the update", () => {
       await expect(stale).toContainText(`before this update on ${format(fetchDay)}`);
       await expect(stale).not.toContainText("Data may be out of date");
       await expect(page.locator("#status")).toContainText(
-        "The latest TEFAS prices are older than this update, so these figures describe an earlier day.",
+        "The latest TEFAS prices are older than this update, so the Sharpe ratios and price lines stop at an earlier day.",
       );
     });
 

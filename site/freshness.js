@@ -76,12 +76,14 @@ const dayFormat = new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", dateStyle:
 const formatDay = (day) => dayFormat.format(new Date(`${day}T00:00:00Z`));
 
 // The warning for prices behind the update, e.g. "TEFAS prices end on 20 Nov
-// 2026, before this update on 27 Nov 2026: the returns, Sharpe ratios and
-// changes describe that day.", or null when pricesBehind is false.
+// 2026, before this update on 27 Nov 2026: the Sharpe ratios and 4-week price
+// lines stop at that day.", or null when pricesBehind is false. Only those
+// come from the prices: TEFAS gives no date for the period returns, so the
+// warning doesn't date them.
 export function pricesBehindText(fetchedAt, lastPriceDate) {
   if (!pricesBehind(fetchedAt, lastPriceDate)) return null;
   return (
     `TEFAS prices end on ${formatDay(lastPriceDate)}, before this update on ${formatDay(fetchDay(fetchedAt))}: ` +
-    "the returns, Sharpe ratios and changes describe that day."
+    "the Sharpe ratios and 4-week price lines stop at that day."
   );
 }
