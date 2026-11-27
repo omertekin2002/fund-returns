@@ -73,12 +73,43 @@ class DecideTest(unittest.TestCase):
         committed = utc("2026-11-19T21:30:00")
         self.assertEqual(self.action(committed, committed), "skip")
 
-    def test_late_run_after_istanbul_midnight_fetches_for_the_new_day(self):
-        # Thursday's fallback started at 00:30 Friday Istanbul (21:30 UTC):
-        # "today" is the calendar day in Istanbul, as before, so Thursday's
-        # committed edition is not today's, whatever the site serves.
+    def test_late_run_after_istanbul_midnight_still_checks_its_own_day(self):
+        # Thursday's fallback started at 00:30 Friday Istanbul (21:30 UTC). It
+        # belongs to Thursday's schedule, as in check_trigger.py, so
+        # Thursday's edition counts as today's.
         now = utc("2026-11-19T21:30:00")
-        self.assertEqual(self.action(YESTERDAY_EDITION, YESTERDAY_EDITION, now), "fetch")
+        self.assertEqual(self.action(YESTERDAY_EDITION, YESTERDAY_EDITION, now), "skip")
+
+    def test_late_run_after_istanbul_midnight_recovers_a_failed_deploy(self):
+        now = utc("2026-11-19T21:30:00")
+        wednesday = utc("2026-11-18T07:15:20")
+        self.assertEqual(self.action(YESTERDAY_EDITION, wednesday, now), "recover")
+        self.assertEqual(self.action(YESTERDAY_EDITION, None, now), "recover")
+
+    def test_late_run_after_istanbul_midnight_fetches_when_its_day_has_no_edition(self):
+        # Thursday's 10:15 run never committed: the repo still has Wednesday's
+        # edition at 00:30 Friday Istanbul, so the fallback rescues Thursday.
+        now = utc("2026-11-19T21:30:00")
+        wednesday = utc("2026-11-18T07:15:20")
+        self.assertEqual(self.action(wednesday, wednesday, now), "fetch")
+
+    def test_monday_fallback_started_at_0038_tuesday_skips(self):
+        # Run 45271719372: Monday 2026-11-23's fallback started at 21:38 UTC,
+        # 00:38 Tuesday Istanbul, and committed 8900c4a, a copy of Monday's
+        # price day. Monday's edition was committed and live, so it skips.
+        monday = utc("2026-11-23T07:15:31")
+        now = utc("2026-11-23T21:38:23")
+        self.assertEqual(self.action(monday, monday, now), "skip")
+
+    def test_friday_fallback_started_after_midnight_skips(self):
+        # 21:30 UTC Friday is 00:30 Saturday Istanbul: no Saturday edition.
+        now = utc("2026-11-20T21:30:00")
+        self.assertEqual(self.action(TODAY_EDITION, TODAY_EDITION, now), "skip")
+
+    def test_fallback_shares_check_trigger_day_rule(self):
+        import check_trigger
+
+        self.assertIs(fallback_action.trigger_day, check_trigger.trigger_day)
 
     def test_late_run_before_istanbul_midnight_still_checks_that_day(self):
         # 20:59 UTC is 23:59 Istanbul, still Friday.
@@ -159,6 +190,11 @@ class MainTest(unittest.TestCase):
     def test_recovers_from_an_error_page(self):
         output = self.main(funds_json("2026-11-20T07:15:31Z"), "<html>404</html>")
         self.assertEqual(output["action"], "recover")
+
+    def test_late_run_skips_from_the_command_line(self):
+        monday = funds_json("2026-11-23T07:15:31Z")
+        output = self.main(monday, monday, now="2026-11-23T21:38:23Z")
+        self.assertEqual(output["action"], "skip")
 
     def test_fetches_when_the_committed_edition_is_old(self):
         output = self.main(funds_json("2026-11-19T07:15:28Z"))

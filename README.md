@@ -273,7 +273,10 @@ The button is disabled until the data has loaded, and while no fund matches.
   after the commit most likely failed: the fallback then republishes the
   committed data, without fetching or committing, through the same choice of
   tested code as any data run, and says so in the run's summary and a
-  warning.
+  warning. GitHub sometimes starts the fallback after midnight Istanbul time;
+  such a run still checks the day it was scheduled for (a run that starts
+  before 12:37 belongs to the previous day), so it doesn't replace that day's
+  edition with a copy of the same prices.
   [`scripts/fallback_action.py`](scripts/fallback_action.py) makes that
   decision. If cron-job.org didn't start a run that day, the
   fallback also opens an issue labelled `trigger-missed` that mentions the
